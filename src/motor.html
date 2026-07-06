@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Offiz — Motor local</title>
+<style>
+  :root {
+    --bg: #0b0f14; --bg2: #121822; --bg3: #1a2230;
+    --borda: #24304a; --texto: #e8edf5; --suave: #93a0b4;
+    --ouro: #c9a227; --verde: #2ecc71; --vermelho: #e74c3c; --azul: #4aa3ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--texto);
+    font: 14px/1.5 'Segoe UI', -apple-system, sans-serif;
+    padding: 16px; user-select: none;
+  }
+  h1 { font-size: 1.05rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  h2 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--suave); margin-bottom: 8px; }
+  .cartao { background: var(--bg2); border: 1px solid var(--borda); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+  .linha:last-child { margin-bottom: 0; }
+  .pill { font-size: 0.78rem; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--borda); white-space: nowrap; }
+  .pill.ok { color: var(--verde); border-color: var(--verde); }
+  .pill.erro { color: var(--vermelho); border-color: var(--vermelho); }
+  .pill.neutro { color: var(--suave); }
+  .pill.ativo { color: var(--ouro); border-color: var(--ouro); }
+  button {
+    background: var(--bg3); color: var(--texto); border: 1px solid var(--borda);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 0.85rem;
+  }
+  button:hover { border-color: var(--ouro); }
+  button.primario { background: var(--ouro); color: #14100a; border-color: var(--ouro); font-weight: 600; }
+  button.perigo { color: var(--vermelho); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input, select {
+    background: var(--bg); color: var(--texto); border: 1px solid var(--borda);
+    border-radius: 8px; padding: 6px 10px; width: 100%; font-size: 0.85rem;
+  }
+  label { display: block; margin-bottom: 8px; }
+  label span { display: block; font-size: 0.75rem; color: var(--suave); margin-bottom: 3px; }
+  #log {
+    background: #070a0e; border: 1px solid var(--borda); border-radius: 8px;
+    padding: 10px; height: 150px; overflow-y: auto; font: 11px/1.6 Consolas, monospace;
+    color: var(--suave); white-space: pre-wrap; user-select: text;
+  }
+  .aviso { font-size: 0.8rem; color: var(--suave); margin-top: 6px; }
+  .msg { font-size: 0.82rem; margin-top: 8px; }
+  .msg.erro { color: var(--vermelho); }
+  .msg.ok { color: var(--verde); }
+  details summary { cursor: pointer; color: var(--suave); font-size: 0.8rem; margin-top: 8px; }
+  details[open] summary { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <h1>⚙️ Motor local <span class="pill neutro" id="pillMotor">…</span></h1>
+
+  <!-- Pareamento -->
+  <div class="cartao">
+    <h2>1 · Organização</h2>
+    <div class="linha">
+      <div id="orgInfo" class="aviso">Verificando…</div>
+      <span class="pill neutro" id="pillPareado">…</span>
+    </div>
+    <div class="linha" id="linhaParear" style="margin-top:8px">
+      <select id="selOrg" style="flex:1" hidden></select>
+      <button id="btnParear" class="primario">Parear com o site</button>
+      <button id="btnDesparear" class="perigo" hidden>Desparear</button>
+    </div>
+    <p class="aviso">Faça login no site (janela principal) e clique em parear — o motor
+      passa a executar as tarefas da sua organização nesta máquina.</p>
+    <p class="msg" id="msgParear"></p>
+  </div>
+
+  <!-- Claude -->
+  <div class="cartao">
+    <h2>2 · Claude (sua assinatura)</h2>
+    <div class="linha">
+      <div id="claudeInfo" class="aviso">Verificando…</div>
+      <span class="pill neutro" id="pillClaude">…</span>
+    </div>
+    <div class="linha" style="margin-top:8px">
+      <button id="btnConectar" class="primario">Conectar Claude</button>
+      <button id="btnTerminal">Abrir no terminal</button>
+      <button id="btnSetupToken" title="Token durável (avançado)">Token durável</button>
+    </div>
+    <p class="msg" id="msgClaude"></p>
+  </div>
+
+  <!-- Motor -->
+  <div class="cartao">
+    <h2>3 · Motor</h2>
+    <div class="linha">
+      <div id="jobInfo" class="aviso">Motor parado.</div>
+      <span></span>
+    </div>
+    <div class="linha" style="margin-top:8px">
+      <button id="btnLigar" class="primario">▶ Ligar motor</button>
+      <button id="btnDesligar" hidden>⏸ Desligar</button>
+    </div>
+    <p class="aviso">Com o motor ligado, as tarefas enviadas pelo site (modo CLI)
+      rodam aqui com o SEU Claude — sem custo por token no Offiz.</p>
+  </div>
+
+  <!-- Log -->
+  <div class="cartao">
+    <h2>Atividade</h2>
+    <div id="log">—</div>
+    <details>
+      <summary>Configurações avançadas</summary>
+      <label><span>URL do site</span><input id="cfgSite"></label>
+      <label><span>URL do backend (API)</span><input id="cfgBackend"></label>
+      <label><span>Binário do claude (vazio = detectar sozinho)</span><input id="cfgClaudeBin"></label>
+      <button id="btnSalvarCfg">Salvar</button>
+      <span class="msg" id="msgCfg"></span>
+    </details>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let estado = null;
+
+  function pill(el, texto, classe) {
+    el.textContent = texto;
+    el.className = 'pill ' + classe;
+  }
+
+  async function atualizar() {
+    estado = await window.offizMotor.estado();
+    const w = estado.worker;
+
+    // pareamento
+    if (estado.pareado) {
+      $('orgInfo').textContent = `Pareado com ${estado.config.orgNome || 'sua organização'}`;
+      pill($('pillPareado'), 'pareado', 'ok');
+      $('btnParear').hidden = true;
+      $('selOrg').hidden = true;
+      $('btnDesparear').hidden = false;
+    } else {
+      $('orgInfo').textContent = 'Ainda não pareado.';
+      pill($('pillPareado'), 'não pareado', 'erro');
+      $('btnParear').hidden = false;
+      $('btnDesparear').hidden = true;
+    }
+
+    // motor
+    if (w.estado === 'parado') {
+      pill($('pillMotor'), 'parado', 'neutro');
+      $('jobInfo').textContent = 'Motor parado.';
+      $('btnLigar').hidden = false; $('btnDesligar').hidden = true;
+    } else if (w.estado === 'ocioso') {
+      pill($('pillMotor'), 'aguardando tarefas', 'ok');
+      $('jobInfo').textContent = 'Nenhuma tarefa no momento — aguardando o site.';
+      $('btnLigar').hidden = true; $('btnDesligar').hidden = false;
+    } else {
+      pill($('pillMotor'), 'executando', 'ativo');
+      $('jobInfo').textContent = w.jobAtual
+        ? `Job #${w.jobAtual.id} · ${w.jobAtual.office} — ${w.jobAtual.titulo}`
+        : 'Executando…';
+      $('btnLigar').hidden = true; $('btnDesligar').hidden = false;
+    }
+
+    // log
+    $('log').textContent = (w.log && w.log.length) ? w.log.join('\n') : '—';
+    $('log').scrollTop = $('log').scrollHeight;
+
+    // config (não sobrescreve enquanto edita)
+    if (document.activeElement.tagName !== 'INPUT') {
+      $('cfgSite').value = estado.config.siteUrl;
+      $('cfgBackend').value = estado.config.backendUrl;
+      $('cfgClaudeBin').value = estado.config.claudeBin || '';
+    }
+  }
+
+  async function atualizarClaude() {
+    $('claudeInfo').textContent = 'Verificando…';
+    const s = await window.offizMotor.claudeStatus();
+    if (!s.installed) {
+      $('claudeInfo').textContent = 'Claude Code não encontrado nesta máquina.';
+      pill($('pillClaude'), 'não instalado', 'erro');
+      $('msgClaude').textContent = 'Instale com: npm install -g @anthropic-ai/claude-code';
+      $('msgClaude').className = 'msg';
+      return;
+    }
+    if (s.loggedIn === false || s.tokenExpired === true) {
+      $('claudeInfo').textContent = `${s.versao || 'Claude instalado'} — conta desconectada.`;
+      pill($('pillClaude'), 'desconectado', 'erro');
+      return;
+    }
+    const assin = s.subscriptionType ? ` (assinatura ${s.subscriptionType})` : '';
+    $('claudeInfo').textContent = `${s.versao || 'Claude instalado'} — conectado${assin}.`;
+    pill($('pillClaude'), 'conectado', 'ok');
+  }
+
+  // ── ações ──
+  $('btnParear').onclick = async () => {
+    $('msgParear').textContent = 'Buscando suas organizações…';
+    $('msgParear').className = 'msg';
+    const r = await window.offizMotor.orgs();
+    if (!r.ok) { $('msgParear').textContent = r.error; $('msgParear').className = 'msg erro'; return; }
+    if (!r.orgs.length) {
+      $('msgParear').textContent = 'Nenhuma organização encontrada para o seu usuário.';
+      $('msgParear').className = 'msg erro'; return;
+    }
+    let orgId = r.orgs[0].id;
+    if (r.orgs.length > 1) {
+      const sel = $('selOrg');
+      if (sel.hidden) {
+        sel.innerHTML = r.orgs.map((o) => `<option value="${o.id}">${o.nome}</option>`).join('');
+        sel.hidden = false;
+        $('msgParear').textContent = 'Escolha a organização e clique de novo em parear.';
+        return;
+      }
+      orgId = parseInt(sel.value, 10);
+    }
+    const p = await window.offizMotor.parear(orgId);
+    if (p.ok) {
+      $('msgParear').textContent = `Pareado com ${p.orgNome} (${p.keyPrefix}…).`;
+      $('msgParear').className = 'msg ok';
+      $('selOrg').hidden = true;
+    } else {
+      $('msgParear').textContent = p.error;
+      $('msgParear').className = 'msg erro';
+    }
+    atualizar();
+  };
+
+  $('btnDesparear').onclick = async () => {
+    const r = await window.offizMotor.desparear();
+    $('msgParear').textContent = r.aviso || 'Pareamento desfeito (revogado no servidor).';
+    $('msgParear').className = r.aviso ? 'msg erro' : 'msg ok';
+    atualizar();
+  };
+  $('btnLigar').onclick = async () => { await window.offizMotor.ligar(); atualizar(); };
+  $('btnDesligar').onclick = async () => { await window.offizMotor.desligar(); atualizar(); };
+
+  $('btnConectar').onclick = async () => {
+    $('msgClaude').textContent = 'Abrindo o login no seu navegador…';
+    $('msgClaude').className = 'msg';
+    const r = await window.offizMotor.conectarClaude();
+    if (!r.ok) { $('msgClaude').textContent = r.error; $('msgClaude').className = 'msg erro'; return; }
+    $('msgClaude').textContent = 'Autorize no navegador — aguardando a conclusão…';
+    const fim = await window.offizMotor.aguardarLoginClaude();
+    if (fim.ok) {
+      $('msgClaude').textContent = 'Conta Claude conectada!';
+      $('msgClaude').className = 'msg ok';
+    } else {
+      $('msgClaude').textContent = fim.error || 'O login não foi concluído.';
+      $('msgClaude').className = 'msg erro';
+    }
+    atualizarClaude();
+  };
+
+  $('btnTerminal').onclick = async () => {
+    const r = await window.offizMotor.reloginTerminal();
+    $('msgClaude').textContent = r.ok
+      ? 'Terminal aberto — conclua o login por lá e volte.'
+      : (r.error || 'Não foi possível abrir o terminal.');
+    $('msgClaude').className = r.ok ? 'msg' : 'msg erro';
+  };
+
+  $('btnSetupToken').onclick = async () => {
+    const r = await window.offizMotor.setupToken();
+    $('msgClaude').textContent = r.ok
+      ? 'Terminal aberto — siga o fluxo do setup-token.'
+      : (r.error || 'Não foi possível abrir o terminal.');
+    $('msgClaude').className = r.ok ? 'msg' : 'msg erro';
+  };
+
+  $('btnSalvarCfg').onclick = async () => {
+    await window.offizMotor.salvarConfig({
+      siteUrl: $('cfgSite').value,
+      backendUrl: $('cfgBackend').value,
+      claudeBin: $('cfgClaudeBin').value,
+    });
+    $('msgCfg').textContent = 'Salvo.';
+    $('msgCfg').className = 'msg ok';
+    setTimeout(() => { $('msgCfg').textContent = ''; }, 2500);
+  };
+
+  // updates empurrados pelo main + refresh periódico leve
+  window.offizMotor.onUpdate(() => atualizar());
+  atualizar();
+  atualizarClaude();
+  setInterval(atualizar, 4000);
+  setInterval(atualizarClaude, 30000); // spawnSync — sem exagero
+</script>
+</body>
+</html>

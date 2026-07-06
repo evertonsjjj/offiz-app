@@ -1,0 +1,79 @@
+# Builda os instaladores do Offiz Desktop (Windows + macOS) a cada tag v*.
+#
+# Repo público → runners (inclusive macOS) são gratuitos. Os assets ganham
+# nomes ESTÁVEIS para o site linkar sempre releases/latest/download/<nome>:
+#   Offiz-Setup.exe  (Windows NSIS)   · Offiz-win.zip (portátil)
+#   Offiz.dmg        (macOS universal) · Offiz-mac.zip
+#
+# Sem assinatura de código por ora: Windows mostra SmartScreen; macOS exige
+# botão-direito → Abrir na 1ª vez (documentado no README).
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Garante a release da tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || \
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --title "Offiz Desktop ${GITHUB_REF_NAME#v}" \
+            --notes "Espelho do site + motor local BYO-CLI. Windows: Offiz-Setup.exe · macOS: Offiz.dmg (universal). Instaladores não assinados — ver README para o aviso de 1ª execução."
+
+  windows:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:win
+      - name: Renomeia para nomes estáveis
+        shell: bash
+        run: |
+          cd dist
+          mv "Offiz Setup"*.exe Offiz-Setup.exe
+          mv Offiz-*-win.zip Offiz-win.zip
+      - name: Sobe assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            dist/Offiz-Setup.exe dist/Offiz-win.zip
+
+  macos:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:mac
+      - name: Renomeia para nomes estáveis
+        run: |
+          cd dist
+          mv Offiz-*.dmg Offiz.dmg
+          mv Offiz-*-mac.zip Offiz-mac.zip
+      - name: Sobe assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
+            dist/Offiz.dmg dist/Offiz-mac.zip

@@ -1,0 +1,39 @@
+{
+  "name": "offiz-standalone",
+  "productName": "Offiz",
+  "version": "0.1.1",
+  "description": "Offiz Standalone — espelho do site com motor local (Claude Code CLI do cliente)",
+  "main": "src/main.js",
+  "author": "Offiz by Adama",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "br.com.offiz.standalone",
+    "productName": "Offiz",
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "package.json"],
+    "win": {
+      "target": ["nsis", "zip"]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["universal"] },
+        { "target": "zip", "arch": ["universal"] }
+      ],
+      "category": "public.app-category.productivity"
+    }
+  }
+}
