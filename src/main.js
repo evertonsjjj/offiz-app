@@ -19,6 +19,7 @@ const config = require('./motor/config');
 const { apiV1 } = require('./motor/backend-client');
 const { MotorWorker } = require('./motor/worker');
 const claudeManager = require('./motor/claude-manager');
+const depsManager = require('./motor/deps-manager');
 
 let cfg = null;
 let siteWin = null;
@@ -26,6 +27,15 @@ let motorWin = null;
 let worker = null;
 
 // ─── Janelas ────────────────────────────────────────────────────────────────
+
+// Marcador de desktop no userAgent: o site detecta "OffizDesktop/x.y.z" para
+// saber que está rodando dentro do executável (e não num navegador comum).
+// Idempotente: nunca acrescenta o marcador duas vezes.
+function marcarUaDesktop(uaBase) {
+  const ua = String(uaBase || '').trim();
+  if (ua.includes('OffizDesktop/')) return ua;
+  return `${ua} OffizDesktop/${app.getVersion()}`;
+}
 
 function criarJanelaSite() {
   siteWin = new BrowserWindow({
@@ -39,6 +49,9 @@ function criarJanelaSite() {
       partition: 'persist:offiz-site', // sessão persistente: login sobrevive a restart
     },
   });
+  // ANTES do load: setUserAgent no webContents vale para TODA navegação e
+  // reload subsequentes desta janela (o fallback global cobre o resto).
+  siteWin.webContents.setUserAgent(marcarUaDesktop(siteWin.webContents.getUserAgent()));
   siteWin.loadURL(cfg.siteUrl);
   siteWin.on('closed', () => { siteWin = null; });
   // Links externos (WhatsApp, OAuth da Anthropic, etc.) → navegador padrão.
@@ -125,6 +138,8 @@ function registrarIpc() {
       backendUrl: cfg.backendUrl,
       orgId: cfg.orgId,
       orgNome: cfg.orgNome,
+      pareadoPor: cfg.pareadoPor,
+      dependencias: cfg.dependencias || [],
       claudeBin: cfg.claudeBin,
     },
     pareado: Boolean(cfg.orgId && config.getWorkerToken(cfg)),
@@ -160,19 +175,40 @@ function registrarIpc() {
     const jwt = await lerTokenDoSite();
     if (!jwt) return { ok: false, error: 'Faça login no site primeiro (janela principal do app).' };
     try {
+      // Qualquer membro ATIVO pode parear (o backend emite token por membro).
       const r = await apiV1(cfg.backendUrl, jwt, 'POST', `/orgs/${orgId}/worker-token`);
+      // Quem pareou: nome do usuário logado (exibido no painel do motor).
+      const me = await apiV1(cfg.backendUrl, jwt, 'GET', '/auth/me').catch(() => null);
       const predios = await apiV1(cfg.backendUrl, jwt, 'GET', '/predios');
-      const p = (Array.isArray(predios) ? predios : (predios.predios || []))
-        .find((x) => x.org_id === orgId);
+      const daOrg = (Array.isArray(predios) ? predios : (predios.predios || []))
+        .filter((x) => x.org_id === orgId);
       cfg.orgId = orgId;
-      cfg.orgNome = (p && p.org_nome) || `Organização ${orgId}`;
+      cfg.orgNome = (daOrg[0] && daOrg[0].org_nome) || `Organização ${orgId}`;
+      cfg.pareadoPor = me ? (me.nome || me.email || '') : '';
+      // Dependências declaradas pelos offices da org (office.json →
+      // "dependencias") — o verificador do painel checa/instala com consentimento.
+      const deps = [];
+      for (const x of daOrg) {
+        const arr = (x.office && Array.isArray(x.office.dependencias)) ? x.office.dependencias : [];
+        for (const d of arr) {
+          const nome = String(d || '').trim();
+          if (nome && !deps.includes(nome)) deps.push(nome);
+        }
+      }
+      cfg.dependencias = deps;
       config.setWorkerToken(cfg, r.token);
       config.save(cfg);
       notificarMotorUI();
-      return { ok: true, orgNome: cfg.orgNome, keyPrefix: r.key_prefix };
+      return {
+        ok: true,
+        orgNome: cfg.orgNome,
+        keyPrefix: r.key_prefix,
+        pareadoPor: cfg.pareadoPor,
+        dependencias: deps,
+      };
     } catch (e) {
       const msg = e.status === 403
-        ? 'Só o dono/admin da organização pode parear o motor local.'
+        ? 'Sua conta não tem acesso a esta organização — confirme o login.'
         : e.message;
       return { ok: false, error: `Pareamento falhou: ${msg}` };
     }
@@ -193,6 +229,8 @@ function registrarIpc() {
     }
     cfg.orgId = null;
     cfg.orgNome = '';
+    cfg.pareadoPor = '';
+    cfg.dependencias = [];
     config.setWorkerToken(cfg, '');
     config.save(cfg);
     notificarMotorUI();
@@ -224,6 +262,32 @@ function registrarIpc() {
   ipcMain.handle('claude-conectar-cancelar', () => claudeManager.loginCancel());
   ipcMain.handle('claude-relogin-terminal', () => claudeManager.reloginTerminal(cfg.claudeBin));
   ipcMain.handle('claude-setup-token', () => claudeManager.setupTokenTerminal(cfg.claudeBin));
+
+  // Instalação do Claude CLI com 1 clique (instalador oficial da Anthropic).
+  // A saída é streamada linha a linha para o painel; ao final o binário
+  // redetectado é fixado em cfg.claudeBin (apps GUI não enxergam o PATH novo).
+  ipcMain.handle('claude-instalar', async () => {
+    const r = await claudeManager.instalarClaude(cfg.claudeBin, (linha) => {
+      if (motorWin && !motorWin.isDestroyed()) {
+        motorWin.webContents.send('claude-instalar-log', linha);
+      }
+    });
+    if (r.ok && r.bin) {
+      cfg.claudeBin = r.bin;
+      config.save(cfg);
+    }
+    return r;
+  });
+
+  // Dependências do escritório (cfg.dependencias, salvo no pareamento).
+  // deps-status é spawnSync (checagens rápidas) — sob demanda, como o claude-status.
+  ipcMain.handle('deps-status', () => depsManager.verificarDeps(cfg.dependencias || []));
+  ipcMain.handle('deps-instalar', (_ev, nome) =>
+    depsManager.instalarDep(nome, (linha) => {
+      if (motorWin && !motorWin.isDestroyed()) {
+        motorWin.webContents.send('deps-instalar-log', linha);
+      }
+    }));
 }
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
@@ -237,6 +301,9 @@ if (!lock) {
   });
 
   app.whenReady().then(() => {
+    // Marcador global ANTES de criar qualquer janela: todo webContents novo
+    // (inclusive após reload/navegação) nasce com "OffizDesktop/x.y.z" no UA.
+    app.userAgentFallback = marcarUaDesktop(app.userAgentFallback);
     cfg = config.load();
     worker = new MotorWorker({
       getBackendUrl: () => cfg.backendUrl,

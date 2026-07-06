@@ -60,6 +60,12 @@ function buildClaudeEnv(anthropicApiKey, motorModo) {
     if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
   }
   env.PYTHONIOENCODING = 'utf-8';
+  // O Claude CLI recusa --dangerously-skip-permissions rodando como root;
+  // IS_SANDBOX=1 é a válvula oficial para ambiente confinado (raro no
+  // desktop, mas cobre quem abrir o app como root/sudo no Mac/Linux).
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    env.IS_SANDBOX = '1';
+  }
   // Mac lançado pelo Finder: PATH mínimo do launchd (sem homebrew nem
   // ~/.local/bin). Mesmo com o claude resolvido por caminho absoluto, o shim
   // npm tem shebang `#!/usr/bin/env node` — o filho ainda precisa achar o node.
@@ -109,6 +115,23 @@ function _existe(p) {
   try { return fs.existsSync(p); } catch { return false; }
 }
 
+/** Procura o claude no prefixo GLOBAL do npm (`npm prefix -g`) — cobre
+ *  instalações npm i -g com prefixo customizado que não estão nem no PATH
+ *  do app GUI nem nos caminhos fixos. No Windows os shims ficam direto no
+ *  prefixo (claude.exe/claude.cmd); no unix em <prefixo>/bin/claude. */
+function _claudeDoNpmGlobal() {
+  const r = process.platform === 'win32'
+    ? spawnSync('cmd', ['/c', 'npm', 'prefix', '-g'], { encoding: 'utf-8', windowsHide: true, timeout: 8000 })
+    : spawnSync('npm', ['prefix', '-g'], { encoding: 'utf-8', timeout: 8000 });
+  if (r.error || r.status !== 0 || !r.stdout) return '';
+  const prefixo = r.stdout.trim().split(/\r?\n/)[0].trim();
+  if (!prefixo) return '';
+  const candidatos = process.platform === 'win32'
+    ? [path.join(prefixo, 'claude.exe'), path.join(prefixo, 'claude.cmd')]
+    : [path.join(prefixo, 'bin', 'claude')];
+  return candidatos.find(_existe) || '';
+}
+
 /**
  * Resolve o comando-base do claude → array argv (ex.: ['cmd','/c','...claude.cmd']).
  *
@@ -128,20 +151,30 @@ function resolveClaudeCmd(claudeBin) {
     const finder = process.platform === 'win32' ? 'where' : 'which';
     const r = spawnSync(finder, ['claude'], { encoding: 'utf-8', windowsHide: true });
     if (r.status === 0 && r.stdout) {
-      const doPath = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      let doPath = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      if (process.platform === 'win32') {
+        // Só claude.exe/claude.cmd(.bat): o `where` também lista o shim SEM
+        // extensão (script bash do npm) que o CreateProcess NÃO executa.
+        doPath = doPath.filter((p) => /\.(exe|cmd|bat)$/i.test(p));
+      }
       const ordenados = doPath
         .filter((p) => /\.exe$/i.test(p))
         .concat(doPath.filter((p) => !/\.exe$/i.test(p)));
       resolved = ordenados.find(_existe) || '';
     }
-    // 2) caminhos fixos comuns (app GUI sem o PATH do shell)
+    // 2) caminhos fixos comuns (app GUI sem o PATH do shell) — inclui o
+    //    destino do instalador nativo (~/.local/bin) e o npm global padrão
     if (!resolved) resolved = claudeCandidates().find(_existe) || '';
+    // 3) prefixo global do npm (npm i -g com prefixo customizado, fora dos
+    //    caminhos fixos) — último recurso, só roda se nada acima achou
+    if (!resolved) resolved = _claudeDoNpmGlobal();
   }
 
   if (!resolved) {
     throw new Error(
-      'Claude Code CLI não encontrado. Instale-o (npm install -g @anthropic-ai/claude-code) ' +
-      'ou aponte o binário no painel do motor.'
+      'Claude Code CLI não encontrado. Use o botão "Instalar Claude CLI" no painel ' +
+      'do motor, instale manualmente (npm install -g @anthropic-ai/claude-code) ' +
+      'ou aponte o binário nas configurações avançadas.'
     );
   }
   if (process.platform === 'win32' && /\.(cmd|bat|ps1)$/i.test(resolved)) {

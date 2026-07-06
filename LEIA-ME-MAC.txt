@@ -1,0 +1,34 @@
+OFFIZ DESKTOP — COMO EXECUTAR NO MAC
+=====================================
+
+Você baixou o Offiz em ZIP. Para rodar:
+
+1. Dê dois cliques no ZIP para extrair (aparece o Offiz.app).
+2. Arraste o Offiz.app para a pasta Aplicativos (opcional, recomendado).
+3. Na PRIMEIRA vez, o macOS vai bloquear o app ("não pode ser aberto"
+   ou "não foi possível verificar"). Para liberar, abra o Terminal
+   (Cmd+Espaço, digite "Terminal") e cole UMA linha:
+
+   Se moveu para Aplicativos:
+     xattr -dr com.apple.quarantine /Applications/Offiz.app && open /Applications/Offiz.app
+
+   Se deixou em Downloads:
+     xattr -dr com.apple.quarantine ~/Downloads/Offiz.app && open ~/Downloads/Offiz.app
+
+4. Das próximas vezes, é só abrir normal (duplo clique). Pronto!
+
+POR QUE ISSO É NECESSÁRIO?
+O macOS marca todo app baixado da internet com "quarentena" e só
+libera automaticamente apps assinados/notarizados pela Apple (que
+exigem uma conta paga de desenvolvedor). O comando acima apenas
+remove essa marca do Offiz — não desativa nenhuma proteção do
+sistema. O código do app é público em:
+https://github.com/evertonsjjj/offiz-app
+
+PRIMEIROS PASSOS
+- Ao abrir, entre com o mesmo e-mail e senha do site (offiz.com.br).
+- Para rodar as tarefas no SEU computador com o SEU plano do Claude
+  (sem custo por token): Menu "Offiz" > "Motor local..." e siga os
+  passos (instalar/conectar o Claude e parear a organização).
+
+Dúvidas: https://github.com/evertonsjjj/offiz-app#readme

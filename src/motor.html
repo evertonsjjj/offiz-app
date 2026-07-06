@@ -44,6 +44,11 @@
     padding: 10px; height: 150px; overflow-y: auto; font: 11px/1.6 Consolas, monospace;
     color: var(--suave); white-space: pre-wrap; user-select: text;
   }
+  .minilog {
+    background: #070a0e; border: 1px solid var(--borda); border-radius: 8px;
+    padding: 8px; max-height: 110px; overflow-y: auto; font: 11px/1.6 Consolas, monospace;
+    color: var(--suave); white-space: pre-wrap; user-select: text; margin-top: 8px;
+  }
   .aviso { font-size: 0.8rem; color: var(--suave); margin-top: 6px; }
   .msg { font-size: 0.82rem; margin-top: 8px; }
   .msg.erro { color: var(--vermelho); }
@@ -80,16 +85,28 @@
       <span class="pill neutro" id="pillClaude">…</span>
     </div>
     <div class="linha" style="margin-top:8px">
+      <button id="btnInstalarClaude" class="primario" hidden>Instalar Claude CLI</button>
       <button id="btnConectar" class="primario">Conectar Claude</button>
       <button id="btnTerminal">Abrir no terminal</button>
       <button id="btnSetupToken" title="Token durável (avançado)">Token durável</button>
     </div>
+    <div id="logInstalar" class="minilog" hidden></div>
     <p class="msg" id="msgClaude"></p>
+  </div>
+
+  <!-- Dependências do escritório (aparece só quando a org pareada declara) -->
+  <div class="cartao" id="cardDeps" hidden>
+    <h2>3 · Dependências do escritório</h2>
+    <div id="listaDeps"></div>
+    <div id="logDeps" class="minilog" hidden></div>
+    <p class="aviso">Ferramentas que os escritórios da sua organização usam nesta
+      máquina. Nada é instalado sozinho — cada instalação pede o seu clique.</p>
+    <p class="msg" id="msgDeps"></p>
   </div>
 
   <!-- Motor -->
   <div class="cartao">
-    <h2>3 · Motor</h2>
+    <h2>4 · Motor</h2>
     <div class="linha">
       <div id="jobInfo" class="aviso">Motor parado.</div>
       <span></span>
@@ -129,9 +146,10 @@
     estado = await window.offizMotor.estado();
     const w = estado.worker;
 
-    // pareamento
+    // pareamento (mostra QUEM pareou — qualquer membro ativo pode)
     if (estado.pareado) {
-      $('orgInfo').textContent = `Pareado com ${estado.config.orgNome || 'sua organização'}`;
+      const por = estado.config.pareadoPor ? ` — por ${estado.config.pareadoPor}` : '';
+      $('orgInfo').textContent = `Pareado com ${estado.config.orgNome || 'sua organização'}${por}`;
       pill($('pillPareado'), 'pareado', 'ok');
       $('btnParear').hidden = true;
       $('selOrg').hidden = true;
@@ -172,16 +190,24 @@
     }
   }
 
+  let instalandoClaude = false;
+
   async function atualizarClaude() {
+    if (instalandoClaude) return; // não sobrescreve a UI durante a instalação
     $('claudeInfo').textContent = 'Verificando…';
     const s = await window.offizMotor.claudeStatus();
+    if (instalandoClaude) return;
     if (!s.installed) {
       $('claudeInfo').textContent = 'Claude Code não encontrado nesta máquina.';
       pill($('pillClaude'), 'não instalado', 'erro');
-      $('msgClaude').textContent = 'Instale com: npm install -g @anthropic-ai/claude-code';
+      $('btnInstalarClaude').hidden = false;
+      $('btnConectar').hidden = true;
+      $('msgClaude').textContent = 'Instale com 1 clique — ou manualmente: npm install -g @anthropic-ai/claude-code';
       $('msgClaude').className = 'msg';
       return;
     }
+    $('btnInstalarClaude').hidden = true;
+    $('btnConectar').hidden = false;
     if (s.loggedIn === false || s.tokenExpired === true) {
       $('claudeInfo').textContent = `${s.versao || 'Claude instalado'} — conta desconectada.`;
       pill($('pillClaude'), 'desconectado', 'erro');
@@ -191,6 +217,84 @@
     $('claudeInfo').textContent = `${s.versao || 'Claude instalado'} — conectado${assin}.`;
     pill($('pillClaude'), 'conectado', 'ok');
   }
+
+  // ── dependências do escritório (whitelist checada no main process) ──
+  let instalandoDep = null; // nome da dependência em instalação (trava a lista)
+  let depsCache = [];       // último resultado do verificador (p/ re-render)
+
+  function renderDeps(lista) {
+    const box = $('listaDeps');
+    box.innerHTML = '';
+    for (const d of lista) {
+      const linha = document.createElement('div');
+      linha.className = 'linha';
+      const info = document.createElement('div');
+      info.className = 'aviso';
+      const p = document.createElement('span');
+      if (!d.conhecida) {
+        info.textContent = `${d.nome} — instale manualmente`;
+        pill(p, 'manual', 'neutro');
+      } else if (d.instalada) {
+        info.textContent = d.nome + (d.versao ? ` — ${d.versao}` : '');
+        pill(p, '✓ instalado', 'ok');
+      } else if (d.brewAusente) {
+        info.textContent = `${d.nome} — instale o Homebrew primeiro (https://brew.sh)`;
+        pill(p, '✗ faltando', 'erro');
+      } else {
+        info.textContent = d.nome + (d.instalavel ? '' : ` — manual: ${d.manual || d.nome}`);
+        pill(p, '✗ faltando', 'erro');
+      }
+      linha.append(info, p);
+      if (d.conhecida && !d.instalada && d.instalavel) {
+        const btn = document.createElement('button');
+        btn.textContent = instalandoDep === d.nome ? 'Instalando…' : 'Instalar';
+        btn.disabled = Boolean(instalandoDep);
+        btn.onclick = () => instalarDep(d.nome);
+        linha.append(btn);
+      }
+      box.append(linha);
+    }
+  }
+
+  async function atualizarDeps() {
+    const deps = (estado && estado.config.dependencias) || [];
+    $('cardDeps').hidden = !deps.length;
+    if (!deps.length) return;
+    depsCache = await window.offizMotor.depsStatus();
+    if (!instalandoDep) renderDeps(depsCache); // não pisca a lista no meio da instalação
+  }
+
+  async function instalarDep(nome) {
+    if (instalandoDep) return;
+    instalandoDep = nome;
+    renderDeps(depsCache); // re-render: botões travados + "Instalando…"
+    $('logDeps').hidden = false;
+    $('logDeps').textContent = '';
+    $('msgDeps').textContent = `Instalando ${nome}… (pode levar alguns minutos)`;
+    $('msgDeps').className = 'msg';
+    const r = await window.offizMotor.instalarDep(nome);
+    instalandoDep = null;
+    if (r.ok) {
+      $('msgDeps').textContent = `${nome} instalado com sucesso${r.versao ? ` (${r.versao})` : ''}.`;
+      $('msgDeps').className = 'msg ok';
+      $('logDeps').hidden = true;
+    } else {
+      $('msgDeps').textContent = r.error || `A instalação de ${nome} falhou.`;
+      $('msgDeps').className = 'msg erro';
+      if (r.log && r.log.length) {
+        $('logDeps').hidden = false;
+        $('logDeps').textContent += ($('logDeps').textContent ? '\n' : '') + r.log.join('\n');
+      }
+    }
+    atualizarDeps();
+  }
+
+  window.offizMotor.onDepsLog((linha) => {
+    const el = $('logDeps');
+    el.hidden = false;
+    el.textContent += (el.textContent ? '\n' : '') + linha;
+    el.scrollTop = el.scrollHeight;
+  });
 
   // ── ações ──
   $('btnParear').onclick = async () => {
@@ -215,24 +319,67 @@
     }
     const p = await window.offizMotor.parear(orgId);
     if (p.ok) {
-      $('msgParear').textContent = `Pareado com ${p.orgNome} (${p.keyPrefix}…).`;
+      const por = p.pareadoPor ? ` por ${p.pareadoPor}` : '';
+      $('msgParear').textContent = `Pareado com ${p.orgNome}${por} (${p.keyPrefix}…).`;
       $('msgParear').className = 'msg ok';
       $('selOrg').hidden = true;
     } else {
       $('msgParear').textContent = p.error;
       $('msgParear').className = 'msg erro';
     }
-    atualizar();
+    await atualizar();
+    atualizarDeps(); // as dependências da org chegaram junto com o pareamento
   };
 
   $('btnDesparear').onclick = async () => {
     const r = await window.offizMotor.desparear();
     $('msgParear').textContent = r.aviso || 'Pareamento desfeito (revogado no servidor).';
     $('msgParear').className = r.aviso ? 'msg erro' : 'msg ok';
-    atualizar();
+    await atualizar();
+    atualizarDeps(); // some a seção de dependências (org despareada)
   };
   $('btnLigar').onclick = async () => { await window.offizMotor.ligar(); atualizar(); };
   $('btnDesligar').onclick = async () => { await window.offizMotor.desligar(); atualizar(); };
+
+  // Instalador do Claude CLI com 1 clique (log ao vivo vindo do main process).
+  window.offizMotor.onInstalarClaudeLog((linha) => {
+    const el = $('logInstalar');
+    el.hidden = false;
+    el.textContent += (el.textContent ? '\n' : '') + linha;
+    el.scrollTop = el.scrollHeight;
+  });
+
+  $('btnInstalarClaude').onclick = async () => {
+    if (instalandoClaude) return;
+    instalandoClaude = true;
+    $('btnInstalarClaude').disabled = true;
+    $('logInstalar').hidden = false;
+    $('logInstalar').textContent = '';
+    $('claudeInfo').textContent = 'Instalando o Claude Code CLI…';
+    pill($('pillClaude'), 'instalando', 'ativo');
+    $('msgClaude').textContent = 'Baixando e instalando — pode levar alguns minutos.';
+    $('msgClaude').className = 'msg';
+    const r = await window.offizMotor.instalarClaude();
+    instalandoClaude = false;
+    $('btnInstalarClaude').disabled = false;
+    if (r.ok) {
+      $('logInstalar').hidden = true;
+      $('msgClaude').textContent = `Instalado${r.versao ? ` (${r.versao})` : ''} — agora clique em Conectar Claude.`;
+      $('msgClaude').className = 'msg ok';
+    } else {
+      if (r.log && r.log.length) {
+        $('logInstalar').hidden = false;
+        $('logInstalar').textContent += ($('logInstalar').textContent ? '\n' : '') + r.log.join('\n');
+      }
+      $('msgClaude').textContent = `${r.error || 'A instalação falhou.'} ` +
+        'Dica: instale manualmente em https://claude.ai/install ou com npm install -g @anthropic-ai/claude-code.';
+      $('msgClaude').className = 'msg erro';
+    }
+    // Só re-renderiza o bloco no SUCESSO: no erro, atualizarClaude() veria
+    // "não instalado" e sobrescreveria a mensagem específica com o texto
+    // genérico (o estado dos botões já está correto no caso de falha).
+    if (r.ok) atualizarClaude();
+  };
 
   $('btnConectar').onclick = async () => {
     $('msgClaude').textContent = 'Abrindo o login no seu navegador…';
@@ -280,10 +427,11 @@
 
   // updates empurrados pelo main + refresh periódico leve
   window.offizMotor.onUpdate(() => atualizar());
-  atualizar();
+  atualizar().then(atualizarDeps); // deps dependem do estado (cfg.dependencias)
   atualizarClaude();
   setInterval(atualizar, 4000);
   setInterval(atualizarClaude, 30000); // spawnSync — sem exagero
+  setInterval(atualizarDeps, 60000);   // idem (checagens spawnSync no main)
 </script>
 </body>
 </html>

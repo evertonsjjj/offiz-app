@@ -20,6 +20,12 @@ const DEFAULTS = {
   // Organização pareada (o motor local só reivindica jobs dela).
   orgId: null,
   orgNome: '',
+  // Quem pareou (nome/email do membro logado no site na hora do pareamento) —
+  // qualquer membro ativo pode parear; o painel do motor mostra quem foi.
+  pareadoPor: '',
+  // Dependências declaradas pelos offices da org (office.json → "dependencias"):
+  // binários e pacotes python que o verificador checa/instala com consentimento.
+  dependencias: [],
   // Token de worker cifrado (base64 do safeStorage) OU plaintext se o SO não
   // tiver cofre ('plain:' prefixado para distinguir).
   workerTokenEnc: '',

@@ -18,6 +18,17 @@ contextBridge.exposeInMainWorld('offizMotor', {
   cancelarLoginClaude: () => ipcRenderer.invoke('claude-conectar-cancelar'),
   reloginTerminal: () => ipcRenderer.invoke('claude-relogin-terminal'),
   setupToken: () => ipcRenderer.invoke('claude-setup-token'),
+  // Instalador do Claude CLI (1 clique) + log ao vivo
+  instalarClaude: () => ipcRenderer.invoke('claude-instalar'),
+  onInstalarClaudeLog: (cb) => {
+    ipcRenderer.on('claude-instalar-log', (_ev, linha) => cb(linha));
+  },
+  // Dependências do escritório (verificar/instalar com consentimento)
+  depsStatus: () => ipcRenderer.invoke('deps-status'),
+  instalarDep: (nome) => ipcRenderer.invoke('deps-instalar', nome),
+  onDepsLog: (cb) => {
+    ipcRenderer.on('deps-instalar-log', (_ev, linha) => cb(linha));
+  },
   onUpdate: (cb) => {
     ipcRenderer.on('motor-update', () => cb());
   },

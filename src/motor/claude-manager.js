@@ -21,7 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { resolveClaudeCmd } = require('./claude-runtime');
+const { resolveClaudeCmd, killProcessTree } = require('./claude-runtime');
 
 // PATH aumentado p/ spawns no *nix: mesmo com o claude resolvido por caminho
 // absoluto, o shim do npm tem shebang `#!/usr/bin/env node` — o filho ainda
@@ -115,6 +115,105 @@ function statusClaude(claudeBin) {
   const tokenExpired = (typeof exp === 'number') ? exp < Date.now() : null;
 
   return { installed: true, versao, loggedIn, tokenExpired, subscriptionType, authMethod, bin };
+}
+
+// ─── Instalação com 1 clique (instalador nativo da Anthropic) ──────────────
+//
+// Windows: `irm https://claude.ai/install.ps1 | iex` (PowerShell, sem admin —
+// instala em %USERPROFILE%\.local\bin\claude.exe).
+// mac/linux: `curl -fsSL https://claude.ai/install.sh | bash` (~/.local/bin).
+// A saída é streamada linha a linha para a UI; ao final o binário é
+// REDETECTADO de verdade (exit 0 do instalador não basta) — o caminho achado
+// volta ao chamador para ser fixado em cfg.claudeBin (apps GUI não enxergam
+// o PATH novo que o instalador escreveu no perfil do shell).
+
+let _installChild = null;
+const INSTALL_TIMEOUT_MS = 5 * 60 * 1000; // generoso: download em rede lenta
+
+/**
+ * Instala o Claude Code CLI com o instalador oficial. onLine(linha) recebe a
+ * saída ao vivo. NUNCA lança — devolve:
+ * { ok, versao?, bin?, jaInstalado? } ou { ok:false, error, log? (últimas linhas) }.
+ */
+function instalarClaude(claudeBin, onLine) {
+  const emit = (linha) => { try { if (onLine) onLine(linha); } catch { /* UI fechou */ } };
+
+  // Idempotente: já instalado → não reinstala, só devolve o que achou.
+  const st = statusClaude(claudeBin);
+  if (st.installed) {
+    return Promise.resolve({ ok: true, jaInstalado: true, versao: st.versao, bin: st.bin });
+  }
+  if (_installChild) {
+    return Promise.resolve({ ok: false, error: 'Já existe uma instalação em andamento — aguarde ela terminar.' });
+  }
+
+  return new Promise((resolve) => {
+    const tail = []; // últimas linhas p/ diagnóstico em caso de erro
+    const push = (chunk) => {
+      for (const l of String(chunk).split(/\r?\n/)) {
+        const t = l.trim();
+        if (!t) continue;
+        tail.push(t);
+        if (tail.length > 40) tail.shift();
+        emit(t);
+      }
+    };
+
+    let child;
+    try {
+      child = process.platform === 'win32'
+        ? spawn('powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+            'irm https://claude.ai/install.ps1 | iex'],
+          { windowsHide: true, env: _spawnEnvLimpo(false) })
+        : spawn('bash', ['-lc', 'curl -fsSL https://claude.ai/install.sh | bash'],
+          // Grupo próprio: o timeout mata a ÁRVORE (curl/instalador filhos).
+          { env: _spawnEnvLimpo(false), detached: true });
+    } catch (e) {
+      return resolve({ ok: false, error: `Não foi possível iniciar o instalador: ${e.message}` });
+    }
+    _installChild = child;
+
+    let done = false;
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      _installChild = null;
+      resolve(r);
+    };
+
+    const timer = setTimeout(() => {
+      emit('[Offiz] A instalação passou de 5 minutos — cancelando.');
+      // Árvore inteira: matar só o powershell/bash deixaria o download ou o
+      // instalador filho órfão (um retry colidiria com ele).
+      try { killProcessTree(child); } catch { /* já morreu */ }
+      finish({ ok: false, error: 'A instalação demorou demais (5 min) e foi cancelada — tente de novo ou instale manualmente.', log: tail.slice(-8) });
+    }, INSTALL_TIMEOUT_MS);
+
+    if (child.stdout) { child.stdout.setEncoding('utf-8'); child.stdout.on('data', push); }
+    if (child.stderr) { child.stderr.setEncoding('utf-8'); child.stderr.on('data', push); }
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      finish({ ok: false, error: `O instalador não rodou: ${e.message}`, log: tail.slice(-8) });
+    });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      // Redetecção SEM override ('' = autodetectar): o instalador nativo cai
+      // em ~/.local/bin, que já está nos candidatos do resolve.
+      const depois = statusClaude('');
+      if (depois.installed) {
+        finish({ ok: true, versao: depois.versao, bin: depois.bin });
+      } else {
+        finish({
+          ok: false,
+          error: code === 0
+            ? 'O instalador terminou, mas o claude não foi encontrado — reinicie o app ou instale manualmente.'
+            : `O instalador terminou com código ${code}.`,
+          log: tail.slice(-8),
+        });
+      }
+    });
+  });
 }
 
 // ─── Login guiado (sem terminal): captura a URL OAuth e abre o navegador ───
@@ -284,6 +383,7 @@ function setupTokenTerminal(claudeBin) {
 
 module.exports = {
   statusClaude,
+  instalarClaude,
   isLoginError,
   loginStart,
   loginWait,

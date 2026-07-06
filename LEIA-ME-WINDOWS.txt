@@ -1,0 +1,29 @@
+OFFIZ DESKTOP — COMO EXECUTAR NO WINDOWS
+=========================================
+
+Você baixou o Offiz em ZIP. Para rodar:
+
+1. CLIQUE COM O BOTÃO DIREITO no arquivo ZIP baixado e escolha
+   "Extrair tudo..." (extraia para qualquer pasta, ex.: Documentos\Offiz).
+
+2. Se o Windows mostrar o aviso "o Windows protegeu o seu computador"
+   (SmartScreen) ao abrir o Offiz.exe:
+   - Clique em "Mais informações" e depois em "Executar assim mesmo".
+   OU, antes de extrair:
+   - Botão direito no ZIP > Propriedades > marque "Desbloquear" > OK.
+
+3. Abra o Offiz.exe (dentro da pasta extraída). Pronto!
+
+POR QUE ESSE AVISO APARECE?
+O Offiz ainda não usa um certificado pago de assinatura de código —
+o aviso é padrão do Windows para qualquer app novo sem certificado,
+não é um alerta de vírus. O código do app é público em:
+https://github.com/evertonsjjj/offiz-app
+
+PRIMEIROS PASSOS
+- Ao abrir, entre com o mesmo e-mail e senha do site (offiz.com.br).
+- Para rodar as tarefas no SEU computador com o SEU plano do Claude
+  (sem custo por token): Menu "Offiz" > "Motor local..." e siga os
+  passos (instalar/conectar o Claude e parear a organização).
+
+Dúvidas: https://github.com/evertonsjjj/offiz-app#readme

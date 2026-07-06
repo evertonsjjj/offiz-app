@@ -71,6 +71,10 @@ jobs:
           cd dist
           mv Offiz-*.dmg Offiz.dmg
           mv Offiz-*-mac.zip Offiz-mac.zip
+      - name: Embute o LEIA-ME no zip (ao lado do Offiz.app)
+        run: |
+          cp LEIA-ME-MAC.txt LEIA-ME.txt
+          zip -X dist/Offiz-mac.zip LEIA-ME.txt
       - name: Sobe assets
         env:
           GH_TOKEN: ${{ github.token }}

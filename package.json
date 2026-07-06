@@ -1,7 +1,7 @@
 {
   "name": "offiz-standalone",
   "productName": "Offiz",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Offiz Standalone — espelho do site com motor local (Claude Code CLI do cliente)",
   "main": "src/main.js",
   "author": "Offiz by Adama",
@@ -21,7 +21,10 @@
     "directories": { "output": "dist" },
     "files": ["src/**/*", "package.json"],
     "win": {
-      "target": ["nsis", "zip"]
+      "target": ["nsis", "zip"],
+      "extraFiles": [
+        { "from": "LEIA-ME-WINDOWS.txt", "to": "LEIA-ME.txt" }
+      ]
     },
     "nsis": {
       "oneClick": true,
