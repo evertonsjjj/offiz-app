@@ -42,13 +42,16 @@ async function apiV1(backendUrl, token, method, apiPath, body) {
   return data;
 }
 
-/** Chamada JSON às rotas /internal com o token de worker da org. */
-async function internal(backendUrl, workerToken, method, internalPath, body) {
+/** Chamada JSON às rotas /internal com o token de worker da org.
+ *  opts.timeoutMs: timeout customizado — o "liberar job" no quit do app usa
+ *  ~3s para não segurar o fechamento se o servidor estiver lento. */
+async function internal(backendUrl, workerToken, method, internalPath, body, opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : TIMEOUT_JSON_MS;
   const resp = await fetch(`${_base(backendUrl)}/internal${internalPath}`, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Worker-Token': workerToken },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_JSON_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (resp.status === 204) return null;
   const data = await resp.json().catch(() => null);

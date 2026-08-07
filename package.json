@@ -1,7 +1,7 @@
 {
   "name": "offiz-standalone",
   "productName": "Offiz",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Offiz Standalone — espelho do site com motor local (Claude Code CLI do cliente)",
   "main": "src/main.js",
   "author": "Offiz by Adama",
@@ -18,12 +18,23 @@
   "build": {
     "appId": "br.com.offiz.standalone",
     "productName": "Offiz",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "package.json"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
     "win": {
-      "target": ["nsis", "zip"],
+      "target": [
+        "nsis",
+        "zip"
+      ],
       "extraFiles": [
-        { "from": "LEIA-ME-WINDOWS.txt", "to": "LEIA-ME.txt" }
+        {
+          "from": "LEIA-ME-WINDOWS.txt",
+          "to": "LEIA-ME.txt"
+        }
       ]
     },
     "nsis": {
@@ -33,8 +44,18 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["universal"] },
-        { "target": "zip", "arch": ["universal"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "category": "public.app-category.productivity"
     }

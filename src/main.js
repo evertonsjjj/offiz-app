@@ -18,13 +18,14 @@
 
 'use strict';
 
-const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, powerSaveBlocker, shell } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
 const config = require('./motor/config');
 const { apiV1 } = require('./motor/backend-client');
 const { MotorWorker } = require('./motor/worker');
+const { CriadorSessao } = require('./motor/criador');
 const claudeManager = require('./motor/claude-manager');
 const depsManager = require('./motor/deps-manager');
 const { origemAutorizada } = require('./motor/origem');
@@ -37,6 +38,82 @@ let cfg = null;
 let siteWin = null;
 let motorWin = null;
 let worker = null;
+let criador = null;
+
+// ─── Proteções do motor local (tarefa rodando × ciclo de vida do app) ───────
+//
+// Bug real de produção: o usuário fechava o app (ou o PC dormia) com uma
+// tarefa em execução — o motor sumia sem avisar e o job morria como ÓRFÃO só
+// depois do timeout do sweeper no servidor. Três proteções:
+// 1. fechar com tarefa rodando pede confirmação (dialog síncrono);
+// 2. confirmou → best-effort: devolve o job à fila (POST liberar, ~3s) e mata
+//    o processo do Claude antes de sair — a tarefa recomeça do zero quando um
+//    motor religar;
+// 3. powerSaveBlocker impede a SUSPENSÃO do PC enquanto houver job rodando
+//    (suspensão congelava o heartbeat e o servidor matava o job como órfão).
+
+let saidaConfirmada = false; // já confirmou o fechamento — não perguntar de novo
+
+function confirmarFechamentoComTarefa(event) {
+  if (saidaConfirmada) return; // liberação já em curso — deixa fechar
+  if (!worker || !worker.jobAtual) return; // sem tarefa — fecha normal
+  const escolha = dialog.showMessageBoxSync({
+    type: 'warning',
+    title: 'Tarefa em execução',
+    message: 'Uma tarefa está rodando nesta máquina.',
+    detail: 'Fechar o Offiz interrompe a execução e a tarefa volta para a fila ' +
+      '(recomeça do zero quando o motor religar).',
+    buttons: ['Cancelar', 'Fechar mesmo assim'],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  if (escolha === 0) {
+    event.preventDefault();
+    return;
+  }
+  // Confirmado: segura ESTE fechamento só o suficiente para o liberar
+  // assíncrono correr (timeout curto — o quit nunca fica pendurado).
+  saidaConfirmada = true;
+  event.preventDefault();
+  encerrarComLiberacao();
+}
+
+async function encerrarComLiberacao() {
+  try {
+    // worker.stop() esperaria o job INTEIRO terminar — aqui é fire-and-forget
+    // (só desliga o loop de claims); quem devolve o job é o liberar.
+    worker.stop().catch(() => {});
+    await Promise.race([
+      worker.liberarJobAtual(3000),
+      new Promise((r) => setTimeout(r, 4000)), // teto geral: nunca travar o quit
+    ]);
+  } catch { /* best-effort */ }
+  // Mata o Claude DEPOIS do liberar: o finish(failed) que o kill dispararia
+  // chega com o job já de volta na fila — o backend o rejeita (409).
+  try { worker.matarProcessoAtual(); } catch { /* best-effort */ }
+  // Sessão do criador: só mata o processo do turno (a pasta de trabalho FICA —
+  // nada foi publicado, e apagar no quit jogaria fora a edição em andamento;
+  // o próximo abrir() do mesmo slug recomeça limpo de qualquer forma).
+  try { if (criador) criador.cancelar(); } catch { /* best-effort */ }
+  app.exit(0);
+}
+
+// PC não dorme com tarefa rodando (proteção 3). 'prevent-app-suspension'
+// mantém o processo vivo com a tampa fechada/economia de energia — a tela
+// pode apagar; o job continua e o heartbeat não some.
+let bloqueioSuspensaoId = null;
+
+function atualizarBloqueioSuspensao() {
+  const rodando = Boolean(worker && worker.jobAtual);
+  if (rodando && bloqueioSuspensaoId === null) {
+    bloqueioSuspensaoId = powerSaveBlocker.start('prevent-app-suspension');
+  } else if (!rodando && bloqueioSuspensaoId !== null) {
+    if (powerSaveBlocker.isStarted(bloqueioSuspensaoId)) {
+      powerSaveBlocker.stop(bloqueioSuspensaoId);
+    }
+    bloqueioSuspensaoId = null;
+  }
+}
 
 // ─── Janelas ────────────────────────────────────────────────────────────────
 
@@ -71,6 +148,9 @@ function criarJanelaSite(urlInicial) {
   // reload subsequentes desta janela (o fallback global cobre o resto).
   siteWin.webContents.setUserAgent(marcarUaDesktop(siteWin.webContents.getUserAgent()));
   siteWin.loadURL(urlInicial || cfg.siteUrl);
+  // Fechar a janela do site com tarefa rodando = fechar o motor (window-all-
+  // closed encerra o app) — pede confirmação e libera o job com elegância.
+  siteWin.on('close', confirmarFechamentoComTarefa);
   siteWin.on('closed', () => { siteWin = null; });
   // Links externos (WhatsApp, OAuth da Anthropic, etc.) → navegador padrão.
   siteWin.webContents.setWindowOpenHandler(({ url }) => {
@@ -471,6 +551,50 @@ function registrarIpc() {
     depsManager.instalarDep(nome, (linha) => {
       enviarParaPaineis('deps-instalar-log', linha);
     }));
+
+  // ─── Criador de escritórios (página /criador do site, admin global) ───────
+  //
+  // UMA sessão por vez (é a máquina do consultor, como o worker é 1 job por
+  // vez). O JWT vem do site A CADA chamada (lerTokenDoSite) — nunca fica
+  // guardado aqui, e um logout no site derruba a próxima chamada com 403 do
+  // backend, que é o comportamento certo. Eventos: canal 'criador-evento'.
+  const respostaErro = (e) => ({ ok: false, error: e.message });
+
+  handleSeguro('criador-abrir', async (_ev, slug) => {
+    const jwt = await lerTokenDoSite();
+    if (!jwt) return { ok: false, error: 'Faça login no site primeiro.' };
+    try {
+      const estado = await criador.abrir({ backendUrl: cfg.backendUrl, jwt, slug });
+      return { ok: true, estado };
+    } catch (e) { return respostaErro(e); }
+  });
+
+  // Fire-and-forget de propósito: um turno leva minutos e o invoke não pode
+  // segurar a página — o término chega pelos eventos ('status' ocupado=false).
+  handleSeguro('criador-enviar', (_ev, payload) => {
+    try {
+      criador.enviar({
+        texto: payload && payload.texto,
+        model: payload && payload.model,
+        effort: payload && payload.effort,
+      }).catch(() => { /* o erro já saiu como evento 'erro' */ });
+      return { ok: true };
+    } catch (e) { return respostaErro(e); }
+  });
+
+  handleSeguro('criador-cancelar', () => criador.cancelar());
+  handleSeguro('criador-estado', () => ({ ok: true, estado: criador.estado() }));
+
+  handleSeguro('criador-publicar', async () => {
+    const jwt = await lerTokenDoSite();
+    if (!jwt) return { ok: false, error: 'Faça login no site primeiro.' };
+    try {
+      const r = await criador.publicar({ backendUrl: cfg.backendUrl, jwt });
+      return { ok: true, resposta: r.resposta };
+    } catch (e) { return respostaErro(e); }
+  });
+
+  handleSeguro('criador-fechar', () => criador.fechar());
 }
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
@@ -494,7 +618,16 @@ if (!lock) {
       getClaudeBin: () => cfg.claudeBin,
       workspacesRoot: path.join(app.getPath('userData'), 'workspaces'),
     });
-    worker.on('update', notificarMotorUI);
+    criador = new CriadorSessao({
+      root: app.getPath('userData'),
+      claudeBin: cfg.claudeBin,
+    });
+    criador.on('evento', (ev) => enviarParaPaineis('criador-evento', ev));
+    worker.on('update', () => {
+      notificarMotorUI();
+      // Liga/desliga o bloqueio de suspensão conforme houver job rodando.
+      atualizarBloqueioSuspensao();
+    });
 
     montarMenu();
     registrarIpc();
@@ -507,6 +640,16 @@ if (!lock) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) criarJanelaSite();
     });
+  });
+
+  // Sair pelo menu/Cmd+Q (sem passar pelo close da janela) também pede
+  // confirmação se houver tarefa rodando — e libera o job antes de sair.
+  app.on('before-quit', confirmarFechamentoComTarefa);
+
+  // Um turno do criador rodando no quit viraria claude ÓRFÃO no SO (filho não
+  // morre com o pai no Windows). Só mata o processo; a pasta de trabalho fica.
+  app.on('will-quit', () => {
+    try { if (criador) criador.cancelar(); } catch { /* best-effort */ }
   });
 
   app.on('window-all-closed', () => {

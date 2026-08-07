@@ -88,6 +88,26 @@ contextBridge.exposeInMainWorld('offizMotor', {
     const offDeps = assinar('deps-instalar-log', (linha) => cb(String(linha)));
     return () => { offClaude(); offDeps(); };
   },
+
+  // O Criador de escritórios (página /criador, admin global): sessão
+  // multi-turno do Claude CLI local sobre uma cópia do escritório. `enviar` é
+  // fire-and-forget — o turno chega pelos eventos de onEvento.
+  criador: {
+    abrir: (slug) => ipcRenderer.invoke('criador-abrir', String(slug)),
+    enviar: (payload) => ipcRenderer.invoke('criador-enviar', {
+      texto: String((payload && payload.texto) || ''),
+      model: (payload && payload.model) || undefined,
+      effort: (payload && payload.effort) || undefined,
+    }),
+    cancelar: () => ipcRenderer.invoke('criador-cancelar'),
+    estado: () => ipcRenderer.invoke('criador-estado'),
+    publicar: () => ipcRenderer.invoke('criador-publicar'),
+    fechar: () => ipcRenderer.invoke('criador-fechar'),
+    onEvento: (cb) => {
+      if (typeof cb !== 'function') return () => {};
+      return assinar('criador-evento', (ev) => cb(ev));
+    },
+  },
 });
 
 // Feature-detect leve: o site sabe que roda dentro do desktop (e qual versão

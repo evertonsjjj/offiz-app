@@ -119,6 +119,10 @@ const DEPS_CONHECIDAS = {
   'python-pptx': _pip('python-pptx'),
   openpyxl: _pip('openpyxl'),
   httpx: _pip('httpx'),
+  // Legenda de vídeo SEM custo (o escritório de conteúdo declara). Faltava
+  // aqui: o office pedia `faster-whisper` e a whitelist não conhecia o nome,
+  // então a declaração não instalava nada e a legenda local falhava calada.
+  'faster-whisper': _pip('faster-whisper'),
 };
 
 function _argvPorSo(spec) {

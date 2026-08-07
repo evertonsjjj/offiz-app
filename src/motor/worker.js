@@ -34,12 +34,24 @@ function _sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** O tar CERTO no Windows: o bsdtar do sistema (System32), por caminho
+ *  absoluto. Resolver 'tar' pelo PATH pega o GNU tar do Git/MSYS quando o
+ *  cliente tem Git instalado — e o GNU tar lê `C:\...` como `host:arquivo`
+ *  ("Cannot connect to C") e quebra extração E empacotamento. */
+function tarBin() {
+  if (process.platform === 'win32') {
+    const sys = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    if (fs.existsSync(sys)) return sys;
+  }
+  return 'tar';
+}
+
 /** Extrai um zip com ferramentas do SO (sem dependências npm):
  *  tar -xf (bsdtar: Windows 10+ e macOS aceitam zip) com fallback
  *  Expand-Archive (Windows) / unzip (unix). */
 function extrairZip(zipPath, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
-  let r = spawnSync('tar', ['-xf', zipPath, '-C', destDir], { windowsHide: true });
+  let r = spawnSync(tarBin(), ['-xf', zipPath, '-C', destDir], { windowsHide: true });
   if (r.status === 0) return;
   if (process.platform === 'win32') {
     r = spawnSync('powershell.exe', [
@@ -111,6 +123,7 @@ class MotorWorker extends EventEmitter {
     this._stopping = false; // stop() em andamento — bloqueia start() até o loop antigo morrer
     this._loopPromise = null;
     this._jobAtual = null;
+    this._procAtual = null; // processo do Claude do job corrente (quit do app o mata)
     this._logLines = [];
     this.workerId = `standalone-${os.hostname()}-${process.pid}`;
   }
@@ -203,10 +216,11 @@ class MotorWorker extends EventEmitter {
     this.log(`Job #${job.id} (org ${job.org_id} · ${job.office_slug}) — iniciando`);
     this.emit('update');
 
-    // Workspace local: limpo a cada job; o zip do servidor é a fonte da verdade.
-    const wsDir = path.join(
-      this._opts.workspacesRoot, `org-${job.org_id}`, String(job.office_slug)
-    );
+    // Workspace local ISOLADO POR JOB (execução paralela fase 1 no servidor:
+    // o zip que chega já é o workspace do JOB, não o do prédio — e duas
+    // máquinas pareadas podem rodar jobs do MESMO prédio ao mesmo tempo).
+    // Limpo antes de extrair e removido no fim; o servidor é a fonte da verdade.
+    const wsDir = path.join(this._opts.workspacesRoot, `job-${job.id}`);
 
     const events = new EventsClient(backendUrl, token, job.id, (m) => this.log(m));
     const parser = new StreamJsonParser();
@@ -246,6 +260,7 @@ class MotorWorker extends EventEmitter {
         motorModo: String(claim.motor_modo || 'cli'),
         claudeBin: this._opts.getClaudeBin(),
       });
+      this._procAtual = proc;
       this.log(`Claude rodando (modo ${claim.motor_modo || 'cli'}, effort ${job.effort})`);
 
       proc.stderr.setEncoding('utf-8');
@@ -307,6 +322,12 @@ class MotorWorker extends EventEmitter {
         status = 'failed';
       }
     } catch (e) {
+      // QUALQUER exceção do ciclo (I/O do zip, spawn, morte do processo do
+      // claude) cai aqui e vira finish(failed) no finally — que sempre roda:
+      // upload e events.stop() engolem os próprios erros e o finish tem
+      // re-tentativas. O job nunca fica 'running' órfão por exceção do slot;
+      // órfão de verdade só se o PROCESSO do app morrer (aí entram o
+      // liberarJobAtual do quit e o sweeper do servidor).
       status = 'failed';
       erro = `Falha no motor local: ${e.message}`;
     } finally {
@@ -371,10 +392,47 @@ class MotorWorker extends EventEmitter {
       }
 
       this.log(`Job #${job.id} finalizado: ${status}${erro ? ` (${erro})` : ''}`);
+      // Workspace por job: remove a cópia local (best-effort — o servidor já
+      // recebeu outputs/memoria; sobra em disco só ocuparia espaço).
+      try { fs.rmSync(wsDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      this._procAtual = null;
       this._jobAtual = null;
       this.emit('update');
     }
   }
+
+  /** Mata o processo do Claude do job corrente (quit do app — sem esperar).
+   *  Sem isto, o app fechando deixaria o claude órfão rodando no SO. */
+  matarProcessoAtual() {
+    if (this._procAtual) {
+      try { killProcessTree(this._procAtual); } catch { /* best-effort */ }
+    }
+  }
+
+  /**
+   * Devolve o job ATUAL para a fila do servidor (POST /internal/jobs/{id}/liberar).
+   *
+   * É o "desligamento elegante" do quit do app: o usuário fechou o Offiz com
+   * uma tarefa rodando — sem isto o job morreria como ÓRFÃO só depois do
+   * timeout do sweeper. Timeout curto (default 3s) para nunca segurar o quit.
+   * Best-effort: falhou (sem rede), o sweeper do servidor recolhe depois.
+   */
+  async liberarJobAtual(timeoutMs = 3000) {
+    const job = this._jobAtual;
+    if (!job) return { ok: true, requeued: false };
+    const backendUrl = this._opts.getBackendUrl();
+    const token = this._opts.getWorkerToken();
+    if (!backendUrl || !token) return { ok: false, requeued: false };
+    try {
+      const r = await internal(backendUrl, token, 'POST', `/jobs/${job.id}/liberar`,
+        { worker_id: this.workerId }, { timeoutMs });
+      this.log(`Job #${job.id} devolvido à fila (app fechando)`);
+      return r || { ok: true, requeued: true };
+    } catch (e) {
+      this.log(`Liberar job #${job.id} falhou (${e.message}) — o sweeper do servidor recolhe`);
+      return { ok: false, requeued: false };
+    }
+  }
 }
 
-module.exports = { MotorWorker, extrairZip, snapshotArquivos, arquivosNovosOuAlterados };
+module.exports = { MotorWorker, extrairZip, tarBin, snapshotArquivos, arquivosNovosOuAlterados };
