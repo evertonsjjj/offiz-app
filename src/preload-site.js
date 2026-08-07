@@ -101,6 +101,13 @@ contextBridge.exposeInMainWorld('offizMotor', {
     }),
     cancelar: () => ipcRenderer.invoke('criador-cancelar'),
     estado: () => ipcRenderer.invoke('criador-estado'),
+    // Anexos (0.2.1): arquivos que EXPLICAM o pedido — vão para anexos/ na
+    // bancada. Base64 porque atravessa o IPC; o main revalida nome e tamanho.
+    anexar: (arquivos) => ipcRenderer.invoke('criador-anexar', {
+      arquivos: Array.isArray(arquivos)
+        ? arquivos.map((a) => ({ nome: String((a && a.nome) || ''), base64: String((a && a.base64) || '') }))
+        : [],
+    }),
     publicar: () => ipcRenderer.invoke('criador-publicar'),
     fechar: () => ipcRenderer.invoke('criador-fechar'),
     onEvento: (cb) => {

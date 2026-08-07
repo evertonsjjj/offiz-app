@@ -273,6 +273,36 @@ class CriadorSessao extends EventEmitter {
     return { ok: true };
   }
 
+  /** Grava anexos em `anexos/` na PASTA DE TRABALHO (fora de escritorio/ — o
+   *  que está lá dentro é publicado, e o briefing do consultor não é parte do
+   *  escritório). O consultor explica o que quer por arquivo: briefing,
+   *  planilha, áudio (.ogg/.mp3/gravação) — a sessão lê de ./anexos/. */
+  anexar({ arquivos }) {
+    if (!this.aberta) throw new Error('Nenhum escritório aberto.');
+    if (!Array.isArray(arquivos) || arquivos.length === 0) {
+      throw new Error('Nada para anexar.');
+    }
+    if (arquivos.length > 10) throw new Error('No máximo 10 anexos por vez.');
+
+    const dir = path.join(this._workDir, 'anexos');
+    fs.mkdirSync(dir, { recursive: true });
+    const salvos = [];
+    for (const a of arquivos) {
+      // Só o nome-base, saneado: o nome vem da página e vira caminho no disco.
+      const bruto = String((a && a.nome) || 'arquivo').split(/[\\/]/).pop();
+      const nome = bruto.replace(/[^\w.\-() À-ſ]+/g, '_').slice(0, 120) || 'arquivo';
+      const buf = Buffer.from(String((a && a.base64) || ''), 'base64');
+      if (buf.length === 0) continue;
+      if (buf.length > 25 * 1024 * 1024) {
+        throw new Error(`O anexo "${nome}" passa de 25 MB.`);
+      }
+      fs.writeFileSync(path.join(dir, nome), buf);
+      salvos.push(nome);
+    }
+    if (salvos.length === 0) throw new Error('Nenhum anexo válido.');
+    return { ok: true, salvos };
+  }
+
   _lerManifesto() {
     try {
       return JSON.parse(fs.readFileSync(path.join(this._officeDir, 'office.json'), 'utf-8'));

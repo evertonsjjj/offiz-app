@@ -39,6 +39,21 @@ Regras duras:
 - JSON válido SEMPRE ao final de cada turno — a tela de preview lê o
   `office.json` a cada resposta sua; um JSON quebrado apaga o preview.
 
+## Anexos (o consultor explica por arquivo)
+
+O consultor pode anexar material em `./anexos/` — briefing, planilha, exemplo,
+**áudio** (.ogg/.mp3/.webm com a explicação falada). A mensagem cita os nomes.
+
+- **Leia os anexos ANTES de propor**: eles são o pedido, não decoração.
+- **Áudio**: tente transcrever com o que a máquina tiver (`ffmpeg` +
+  `faster-whisper`/`whisper`, se instalados). Se não houver como transcrever,
+  **diga isso com todas as letras** e peça a explicação em texto — nunca finja
+  ter ouvido.
+- `anexos/` fica FORA de `escritorio/` de propósito: anexo é insumo da
+  conversa, não parte do escritório — a publicação não o leva. Se um anexo
+  precisa virar material do escritório (um modelo, uma planilha-base), copie
+  para dentro de `escritorio/` dizendo o que copiou e para onde.
+
 ## Link de GitHub (o consultor cola um repositório)
 
 Fluxo: clone raso **fora** do escritório → avaliar → propor → só então copiar.

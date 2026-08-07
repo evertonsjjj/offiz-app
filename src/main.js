@@ -585,6 +585,12 @@ function registrarIpc() {
   handleSeguro('criador-cancelar', () => criador.cancelar());
   handleSeguro('criador-estado', () => ({ ok: true, estado: criador.estado() }));
 
+  handleSeguro('criador-anexar', (_ev, payload) => {
+    try {
+      return criador.anexar({ arquivos: (payload && payload.arquivos) || [] });
+    } catch (e) { return respostaErro(e); }
+  });
+
   handleSeguro('criador-publicar', async () => {
     const jwt = await lerTokenDoSite();
     if (!jwt) return { ok: false, error: 'Faça login no site primeiro.' };
