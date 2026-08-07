@@ -311,6 +311,43 @@ class CriadorSessao extends EventEmitter {
     }
   }
 
+  /** Os arquivos do ESCRITÓRIO na bancada (caminho relativo + tamanho) — o
+   *  painel "Arquivos" da tela lista daqui. Só escritorio/ (o publicável);
+   *  anexos e a persona do criador ficam de fora. */
+  listarArquivos() {
+    if (!this.aberta) throw new Error('Nenhum escritório aberto.');
+    const arquivos = [];
+    for (const [rel, st] of _snapshot(this._officeDir)) {
+      arquivos.push({ caminho: rel, tamanho: st.tamanho });
+      if (arquivos.length >= 500) break; // teto de sanidade
+    }
+    arquivos.sort((a, b) => a.caminho.localeCompare(b.caminho));
+    return { ok: true, arquivos };
+  }
+
+  /** Conteúdo de UM arquivo do escritório, para leitura na tela ("ver o
+   *  prompt e as skills"). Sempre resolvido DENTRO de escritorio/ — caminho
+   *  vindo da página nunca vira passeio pelo disco. */
+  lerArquivo({ caminho }) {
+    if (!this.aberta) throw new Error('Nenhum escritório aberto.');
+    const alvo = path.resolve(this._officeDir, String(caminho || ''));
+    if (!alvo.startsWith(path.resolve(this._officeDir) + path.sep)) {
+      throw new Error('Caminho fora do escritório.');
+    }
+    let st;
+    try { st = fs.statSync(alvo); } catch { throw new Error('Arquivo não encontrado.'); }
+    if (!st.isFile()) throw new Error('Não é um arquivo.');
+    if (st.size > 256 * 1024) {
+      return { ok: true, binario: true, tamanho: st.size, aviso: 'Arquivo grande demais para exibir aqui.' };
+    }
+    const buf = fs.readFileSync(alvo);
+    // Heurística de binário: NUL nos primeiros 4 KB.
+    if (buf.subarray(0, 4096).includes(0)) {
+      return { ok: true, binario: true, tamanho: st.size };
+    }
+    return { ok: true, binario: false, tamanho: st.size, conteudo: buf.toString('utf-8') };
+  }
+
   /** Arquivos que a sessão criou/alterou/removeu desde a abertura. */
   _alterados() {
     const agora = _snapshot(this._officeDir);

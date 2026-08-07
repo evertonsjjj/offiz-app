@@ -591,6 +591,17 @@ function registrarIpc() {
     } catch (e) { return respostaErro(e); }
   });
 
+  // O painel "Arquivos" da tela (ver o prompt E as skills lado a lado com o
+  // preview). Leitura pura — quem edita é a sessão do Claude.
+  handleSeguro('criador-arquivos', () => {
+    try { return criador.listarArquivos(); } catch (e) { return respostaErro(e); }
+  });
+  handleSeguro('criador-arquivo', (_ev, payload) => {
+    try {
+      return criador.lerArquivo({ caminho: (payload && payload.caminho) || '' });
+    } catch (e) { return respostaErro(e); }
+  });
+
   handleSeguro('criador-publicar', async () => {
     const jwt = await lerTokenDoSite();
     if (!jwt) return { ok: false, error: 'Faça login no site primeiro.' };

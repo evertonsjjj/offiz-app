@@ -108,6 +108,10 @@ contextBridge.exposeInMainWorld('offizMotor', {
         ? arquivos.map((a) => ({ nome: String((a && a.nome) || ''), base64: String((a && a.base64) || '') }))
         : [],
     }),
+    // Painel "Arquivos" (0.2.2): lista e lê o conteúdo do escritório na
+    // bancada — ver prompt e skills sem sair da tela.
+    arquivos: () => ipcRenderer.invoke('criador-arquivos'),
+    arquivo: (caminho) => ipcRenderer.invoke('criador-arquivo', { caminho: String(caminho || '') }),
     publicar: () => ipcRenderer.invoke('criador-publicar'),
     fechar: () => ipcRenderer.invoke('criador-fechar'),
     onEvento: (cb) => {
