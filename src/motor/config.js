@@ -31,6 +31,8 @@ const DEFAULTS = {
   workerTokenEnc: '',
   // Override manual do binário do claude (vazio = auto-detecção).
   claudeBin: '',
+  // Idem para o codex (o 2º motor — orgs OpenAI).
+  codexBin: '',
 };
 
 function configPath() {

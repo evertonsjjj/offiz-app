@@ -4,11 +4,16 @@
 // desktop C:/Offiz/Offiz/ipc/claude-runtime.js). Mantém o MESMO contrato de
 // eventos do worker cloud: agent_text / tool_use / subagente / resultado.
 //
-// Modos de credencial (motor_modo do claim):
-// - "api": injeta a ANTHROPIC_API_KEY da organização (BYOK) e remove TODA
-//   credencial da máquina — o custo é sempre da org.
+// Modos de credencial (motor_modo do claim — o backend decide, aqui só se
+// obedece):
+// - "api": injeta a ANTHROPIC_API_KEY da organização (BYOK) — e, desde
+//   20/08/2026, o ANTHROPIC_BASE_URL quando a org usa outro provedor
+//   (OpenAI via gateway compatível): é assim que o motor LOCAL roda um job
+//   de org OpenAI, com a chave e o endereço DELA. Toda credencial da máquina
+//   é removida antes — o custo é sempre da org.
 // - "cli": NÃO injeta chave nenhuma e preserva o login local do cliente
 //   (claude login / CLAUDE_CODE_OAUTH_TOKEN) — roda na assinatura DELE.
+//   Só acontece em org Anthropic; para as demais o claim manda "api".
 
 'use strict';
 
@@ -45,7 +50,11 @@ function buildClaudeArgs(model, effort, sessionId) {
   ];
 }
 
-function buildClaudeEnv(anthropicApiKey, motorModo) {
+// ESPELHO de build_claude_env (webapp/worker/claude_proc.py) — o contrato da
+// casa é que os dois mudam JUNTOS. `usaBearer` entra no FIM da lista de
+// parâmetros de propósito: a assinatura é posicional e um parâmetro no meio
+// quebraria os chamadores em silêncio.
+function buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer) {
   const env = { ...process.env };
   // Vars que, sobrando no ambiente, têm precedência sobre a chave injetada e
   // cobrariam a conta errada (ou dariam 401).
@@ -57,7 +66,23 @@ function buildClaudeEnv(anthropicApiKey, motorModo) {
     // `claude setup-token`) e deixa o CLI cair no login local. Nunca injeta.
   } else {
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
-    if (anthropicApiKey) env.ANTHROPIC_API_KEY = anthropicApiKey;
+    if (anthropicApiKey) {
+      // UMA variável, nunca as duas: AUTH_TOKEN vira "Authorization: Bearer"
+      // (o que os gateways leem) e API_KEY vira "x-api-key" (a Anthropic
+      // oficial). Qual vence com as duas setadas não é documentado de forma
+      // consistente — não se depende do desempate.
+      if (usaBearer) {
+        env.ANTHROPIC_AUTH_TOKEN = anthropicApiKey;
+        delete env.ANTHROPIC_API_KEY;
+        // Upstream não-Anthropic recusa com 400 os campos experimentais.
+        env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = '1';
+      } else {
+        env.ANTHROPIC_API_KEY = anthropicApiKey;
+      }
+    }
+    // Endpoint do provedor da org (OpenAI via gateway). Entra DEPOIS do
+    // delete lá em cima — a URL que valer é a do claim, nunca a da máquina.
+    if (anthropicBaseUrl) env.ANTHROPIC_BASE_URL = anthropicBaseUrl;
   }
   env.PYTHONIOENCODING = 'utf-8';
   // O Claude CLI recusa --dangerously-skip-permissions rodando como root;
@@ -187,13 +212,13 @@ function resolveClaudeCmd(claudeBin) {
  * Spawna o Claude headless no workspace e envia o prompt via STDIN em UTF-8
  * (evita mojibake de acentos no Windows e limite de tamanho de linha de comando).
  */
-function spawnClaude({ workspaceDir, prompt, model, effort, sessionId, anthropicApiKey, motorModo, claudeBin }) {
+function spawnClaude({ workspaceDir, prompt, model, effort, sessionId, anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer, claudeBin }) {
   const base = resolveClaudeCmd(claudeBin);
   const args = base.slice(1).concat(buildClaudeArgs(model, effort, sessionId));
 
   const proc = spawn(base[0], args, {
     cwd: workspaceDir,
-    env: buildClaudeEnv(anthropicApiKey, motorModo),
+    env: buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer),
     stdio: ['pipe', 'pipe', 'pipe'],
     // Grupo próprio no unix: killProcessTree mata o claude E os filhos dele.
     detached: process.platform !== 'win32',

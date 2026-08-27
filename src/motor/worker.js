@@ -24,6 +24,7 @@ const { spawnSync } = require('child_process');
 const { internal, baixarWorkspaceZip, uploadArquivo } = require('./backend-client');
 const { EventsClient } = require('./events-client');
 const { spawnClaude, killProcessTree, StreamJsonParser } = require('./claude-runtime');
+const { spawnCodex, CodexJsonParser } = require('./codex-runtime');
 
 const POLL_INTERVAL_MS = 2000;      // fila vazia → novo claim em 2s
 const CLAIM_ERROR_BACKOFF_MS = 5000; // backend inacessível → 5s
@@ -190,6 +191,11 @@ class MotorWorker extends EventEmitter {
       try {
         claim = await internal(backendUrl, token, 'POST', '/jobs/claim', {
           worker_id: this.workerId,
+          // Capacidades AUTODECLARADAS deste build — o backend só entrega
+          // o job (e a chave) a quem sabe executá-lo:
+          // - anthropic_base_url: sabe injetar o endpoint de gateway;
+          // - motor_codex: sabe rodar org OpenAI no Codex CLI, direto.
+          capacidades: ['anthropic_base_url', 'motor_codex'],
         });
       } catch (e) {
         this.log(`Claim falhou (${e.message}) — nova tentativa em 5s`);
@@ -223,7 +229,10 @@ class MotorWorker extends EventEmitter {
     const wsDir = path.join(this._opts.workspacesRoot, `job-${job.id}`);
 
     const events = new EventsClient(backendUrl, token, job.id, (m) => this.log(m));
-    const parser = new StreamJsonParser();
+    // QUAL MOTOR: o claim manda `motor_cli` — 'codex' roda o Codex CLI
+    // (org OpenAI, chave direto); qualquer outro valor, o Claude Code.
+    const usaCodex = String(claim.motor_cli || 'claude').trim().toLowerCase() === 'codex';
+    const parser = usaCodex ? new CodexJsonParser() : new StreamJsonParser();
     let status = 'done';
     let erro = null;
     let proc = null;
@@ -249,19 +258,39 @@ class MotorWorker extends EventEmitter {
 
       events.start();
 
-      // 2) spawn do Claude local
-      proc = spawnClaude({
-        workspaceDir: wsDir,
-        prompt: String(job.prompt || ''),
-        model: String(job.claude_model || 'claude-opus-4-8'),
-        effort: job.effort,
-        sessionId: String(job.session_id || ''),
-        anthropicApiKey: claim.anthropic_api_key || '',
-        motorModo: String(claim.motor_modo || 'cli'),
-        claudeBin: this._opts.getClaudeBin(),
-      });
-      this._procAtual = proc;
-      this.log(`Claude rodando (modo ${claim.motor_modo || 'cli'}, effort ${job.effort})`);
+      // 2) spawn do motor local — Claude ou Codex, quem manda é o claim
+      if (usaCodex) {
+        proc = spawnCodex({
+          workspaceDir: wsDir,
+          prompt: String(job.prompt || ''),
+          model: String(job.claude_model || ''),
+          effort: job.effort,
+          // No Codex a chave da org viaja no MESMO campo do claim (o backend
+          // decide o que ela é conforme o provedor).
+          openaiApiKey: claim.anthropic_api_key || '',
+          codexBin: this._opts.getCodexBin ? this._opts.getCodexBin() : '',
+        });
+        this._procAtual = proc;
+        this.log(`Codex rodando (org OpenAI, effort ${job.effort})`);
+      } else {
+        proc = spawnClaude({
+          workspaceDir: wsDir,
+          prompt: String(job.prompt || ''),
+          model: String(job.claude_model || 'claude-opus-4-8'),
+          effort: job.effort,
+          sessionId: String(job.session_id || ''),
+          anthropicApiKey: claim.anthropic_api_key || '',
+          motorModo: String(claim.motor_modo || 'cli'),
+          anthropicBaseUrl: claim.anthropic_base_url || '',
+          // Gateway lê "Authorization: Bearer"; a Anthropic oficial lê
+          // x-api-key. Backend antigo não manda o campo — o default é o
+          // comportamento de sempre.
+          usaBearer: String(claim.auth_modo || 'api_key') === 'bearer',
+          claudeBin: this._opts.getClaudeBin(),
+        });
+        this._procAtual = proc;
+        this.log(`Claude rodando (modo ${claim.motor_modo || 'cli'}, effort ${job.effort})`);
+      }
 
       proc.stderr.setEncoding('utf-8');
       proc.stderr.on('data', (chunk) => {
@@ -298,7 +327,7 @@ class MotorWorker extends EventEmitter {
       const rc = await new Promise((resolve) => {
         proc.on('close', (code) => resolve(code));
         proc.on('error', (e) => {
-          erro = `Falha ao iniciar o Claude: ${e.message}`;
+          erro = `Falha ao iniciar o ${usaCodex ? 'Codex' : 'Claude'}: ${e.message}`;
           resolve(-1);
         });
       });
@@ -312,11 +341,11 @@ class MotorWorker extends EventEmitter {
         erro = `Tempo limite de ${timeoutMin} minutos excedido.`;
       } else if (parser.resultInfo && parser.resultInfo.is_error) {
         status = 'failed';
-        erro = parser.resultInfo.erro || 'O Claude terminou com erro.';
+        erro = parser.resultInfo.erro || `O ${usaCodex ? 'Codex' : 'Claude'} terminou com erro.`;
       } else if (rc !== 0 && !erro) {
         status = 'failed';
         const detalhe = stderrTail.slice(-5).join(' | ').trim();
-        erro = `Processo do Claude terminou com código ${rc}.` +
+        erro = `Processo do ${usaCodex ? 'Codex' : 'Claude'} terminou com código ${rc}.` +
           (detalhe ? ` Detalhe: ${detalhe.slice(0, 400)}` : '');
       } else if (erro) {
         status = 'failed';

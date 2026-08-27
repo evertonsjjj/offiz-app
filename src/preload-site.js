@@ -66,6 +66,9 @@ contextBridge.exposeInMainWorld('offizMotor', {
 
   // Instalação do Claude CLI com 1 clique (log ao vivo em onInstalarLinha).
   instalarClaude: () => ipcRenderer.invoke('claude-instalar'),
+  // Motor Codex (OpenAI) — app 0.2.3+; site antigo simplesmente não chama.
+  codexStatus: () => ipcRenderer.invoke('codex-status'),
+  instalarCodex: () => ipcRenderer.invoke('codex-instalar'),
 
   // Dependências do escritório (whitelist fixa no main — nome vindo do
   // servidor nunca vira execução).
@@ -85,8 +88,9 @@ contextBridge.exposeInMainWorld('offizMotor', {
   onInstalarLinha: (cb) => {
     if (typeof cb !== 'function') return () => {};
     const offClaude = assinar('claude-instalar-log', (linha) => cb(String(linha)));
+    const offCodex = assinar('codex-instalar-log', (linha) => cb(String(linha)));
     const offDeps = assinar('deps-instalar-log', (linha) => cb(String(linha)));
-    return () => { offClaude(); offDeps(); };
+    return () => { offClaude(); offCodex(); offDeps(); };
   },
 
   // O Criador de escritórios (página /criador, admin global): sessão

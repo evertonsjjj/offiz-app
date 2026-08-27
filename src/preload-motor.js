@@ -7,6 +7,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('offizMotor', {
   estado: () => ipcRenderer.invoke('motor-estado'),
   claudeStatus: () => ipcRenderer.invoke('claude-status'),
+  codexStatus: () => ipcRenderer.invoke('codex-status'),
+  instalarCodex: () => ipcRenderer.invoke('codex-instalar'),
+  codexLoginTerminal: () => ipcRenderer.invoke('codex-login-terminal'),
+  onInstalarCodexLog: (cb) => {
+    ipcRenderer.on('codex-instalar-log', (_ev, linha) => cb(linha));
+  },
   orgs: () => ipcRenderer.invoke('motor-orgs'),
   parear: (orgId) => ipcRenderer.invoke('motor-parear', orgId),
   desparear: () => ipcRenderer.invoke('motor-desparear'),

@@ -28,7 +28,7 @@ Regras duras:
   tarefas sem o consultor pedir explicitamente, e avise da consequência.
 - **`abas`**: lista FECHADA de painéis — `inicio`, `conversa`, `entregas`,
   `meses`, `clientes`, `pentest`, `casos`, `monitor`, `biblioteca`, `oficina`,
-  `agenda`. Forma curta (`"clientes"`) ou longa
+  `agenda`, `estudio`. Forma curta (`"clientes"`) ou longa
   (`{"id": "clientes", "rotulo": "Pacientes", "icone": "🩺"}`, rotulo ≤40,
   ajuda ≤120). Um id uma vez só. `conhecimento` e `guia` ficam FORA (portas
   fixas da shell). **Não existe inventar painel**: se o pedido exigir um

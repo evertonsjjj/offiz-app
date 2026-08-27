@@ -1,57 +1,98 @@
-# Offiz Desktop — downloads
+# Offiz Standalone — espelho do site com motor local
 
-App desktop do [Offiz](https://offiz.com.br): espelho do site com **motor local** —
-rode as tarefas dos seus escritórios no seu computador com o **seu Claude Code CLI**
-(assinatura própria, sem custo por token no Offiz).
+App desktop (Windows/Mac) que o cliente baixa e instala. A janela principal é o
+**próprio site** (offiz.com.br) — toda a engine, dados e UI ficam no servidor,
+o app nunca desatualiza. O que o app adiciona é o **motor local**: um worker
+que roda as tarefas da organização do cliente **nesta máquina**, com o **Claude
+Code CLI dele** (login/assinatura própria) — em `motor_modo = "cli"` o custo
+por token **não** entra no ledger do Offiz.
 
-## Baixar (recomendado: ZIP portátil)
+```
+Máquina do cliente                          Servidor (Coolify)
+┌─────────────────────────────┐            ┌─────────────────────────────┐
+│ Offiz Standalone (Electron)  │            │ backend (API + fila + dados)│
+│ ├─ Janela = o SITE (espelho) │◀──HTTPS───▶│ ├─ /api/v1 (site + pareamento)
+│ └─ Motor local (worker)      │            │ └─ /internal (claim/eventos/ │
+│    ├─ claim → workspace.zip  │            │     workspace.zip/upload)    │
+│    ├─ Claude Code CLI (login │            └─────────────────────────────┘
+│    │   do CLIENTE, skip-perm)│
+│    └─ upload outputs+memoria │
+└─────────────────────────────┘
+```
 
-### Windows — [Offiz-win.zip](https://github.com/evertonsjjj/offiz-app/releases/latest/download/Offiz-win.zip)
+## Fluxo do cliente (3 passos, tudo no app)
 
-1. Baixe o `Offiz-win.zip`.
-2. **Antes de extrair**: botão direito no zip → **Propriedades** → marque
-   **✅ Desbloquear** → OK. *(Isso remove o aviso do Windows de todos os
-   arquivos de uma vez — sem ele, o SmartScreen pode bloquear o app.)*
-3. Extraia a pasta onde quiser (ex.: `C:\Offiz Desktop`) e abra o **Offiz.exe**.
-4. O guia também vai dentro do ZIP: **LEIA-ME.txt**.
+1. **Login no site** — a janela principal É o site; entra com e-mail/senha normais.
+2. **Parear** — painel *Motor local* (menu ⚙️ ou `Ctrl+M`) → "Parear com o site".
+   O app lê a sessão do site, descobre as organizações do usuário e troca por um
+   token de worker escopado (`offiz_wk_…`, guardado cifrado via safeStorage).
+   Só **dono/admin** da organização pode parear.
+3. **Conectar o Claude** — botão "Conectar Claude": roda `claude auth login
+   --claudeai` invisível, captura a URL do OAuth e abre o navegador; o callback
+   conclui sozinho (sem colar código). Fallbacks: terminal visível (`wt`/cmd no
+   Windows, script `.command` + Terminal.app no Mac) e `claude setup-token`.
 
-> Alternativa com instalador: [Offiz-Setup.exe](https://github.com/evertonsjjj/offiz-app/releases/latest/download/Offiz-Setup.exe)
-> — se o SmartScreen bloquear, clique em "Mais informações" → "Executar assim
-> mesmo". Se nem essa opção aparecer, use o ZIP acima (com o Desbloquear).
+Ligou o motor → as tarefas enviadas pelo site (org em `motor_modo = "cli"`)
+rodam aqui com `--dangerously-skip-permissions` dentro de um workspace isolado
+(`userData/workspaces/org-<id>/<office>/`, limpo a cada job).
 
-### macOS — [Offiz-mac.zip](https://github.com/evertonsjjj/offiz-app/releases/latest/download/Offiz-mac.zip)
+## Como o motor executa um job
 
-1. Baixe e extraia; arraste o **Offiz.app** para Aplicativos.
-2. Na primeira vez, o macOS bloqueia apps não assinados (nas versões novas
-   nem o botão-direito → Abrir resolve). Libere com **UMA linha** no Terminal
-   (Cmd+Espaço → "Terminal"):
+1. `POST /internal/jobs/claim` (X-Worker-Token da org) — o backend só entrega
+   jobs **da organização pareada**; o worker cloud, por sua vez, **pula** orgs
+   em modo cli (esses jobs só rodam aqui).
+2. `GET /internal/jobs/{id}/workspace.zip` — baixa o workspace inteiro
+   (office materializado + entrada/ + clientes + memoria/ + knowledge/).
+3. Spawna o `claude` local (stream-json headless, mesmo contrato do worker
+   cloud); eventos vão ao vivo para o site via `POST /internal/jobs/{id}/events`.
+4. Sobe outputs novos + `memoria/` alterada (`POST /internal/jobs/{id}/upload`).
+5. `POST /internal/jobs/{id}/finish` — entregas aparecem no site para aprovação.
 
-   ```
-   xattr -dr com.apple.quarantine /Applications/Offiz.app && open /Applications/Offiz.app
-   ```
+## Dev
 
-   *(Isso só remove a marca de quarentena do download — não desativa nenhuma
-   proteção do sistema. Das próximas vezes é duplo clique normal.)*
-3. O guia completo também vai dentro do ZIP: **LEIA-ME.txt**.
+```powershell
+cd webapp/standalone
+npm install
+# apontando para o ambiente local:
+$env:OFFIZ_SITE_URL    = "http://localhost:5173"
+$env:OFFIZ_BACKEND_URL = "http://localhost:8100"
+npm start
+```
 
-> Alternativa: [Offiz.dmg](https://github.com/evertonsjjj/offiz-app/releases/latest/download/Offiz.dmg)
-> (universal, Intel + Apple Silicon) — mesmas instruções de primeira abertura.
+Config persistida em `%APPDATA%/offiz-standalone/config.json`
+(`~/Library/Application Support/offiz-standalone/` no Mac). As envs acima têm
+precedência mas não são gravadas.
 
-## Como usar
+## Empacotar
 
-1. Abra o app — a janela principal é o próprio site; faça seu login normal
-   (qualquer membro da organização pode conectar a própria máquina).
-2. Painel **Motor local** (Ctrl+M / Cmd+M): clique **Parear com o site**.
-3. Sem o Claude na máquina? Clique **Instalar Claude CLI** (1 clique — usa o
-   instalador oficial). Depois, **Conectar Claude** (login da sua assinatura
-   via navegador).
-4. Se o seu escritório precisar de programas extras (ex.: ffmpeg), a seção
-   **Dependências do escritório** mostra o que falta com botão **Instalar**.
-5. **Ligar motor** — pronto: as tarefas do seu prédio rodam na sua máquina.
+```bash
+npm run dist:win   # NSIS one-click + zip (rodar no Windows)
+npm run dist:mac   # dmg + zip (PRECISA rodar num Mac)
+```
 
-## Build
+Sem assinatura de código o Windows mostra SmartScreen e o macOS exige
+botão-direito → Abrir na primeira vez (ou Apple Developer ID + notarização
+para distribuição limpa).
 
-Os instaladores são gerados pelo [workflow](.github/workflows/build.yml) a cada
-tag `v*` (runners Windows e macOS do GitHub Actions). Os avisos de primeira
-execução somem quando houver assinatura de código (certificado Windows +
-Apple Developer ID); o CI já está pronto para recebê-los.
+## Segurança
+
+- O token de worker é **escopado à organização** (hash sha256 no banco,
+  revogável em Configurações) — não é o token global do cloud.
+- O app guarda o token via `safeStorage` (DPAPI/Keychain).
+- `--dangerously-skip-permissions` roda **na máquina do cliente, no workspace
+  da org dele** — deixe isso explícito no onboarding.
+- ToS: modo cli usa a assinatura Claude do próprio cliente nos próprios
+  escritórios (análogo BYO-CLI do BYOK). Confirmar a política de uso da
+  Anthropic antes de vender isso em escala.
+
+
+## Os dois motores
+
+O app executa tarefas com **Claude Code** (Anthropic — a assinatura de quem
+usa, modo `cli`) e, desde a v0.2.3, com **Codex CLI** (OpenAI — org com
+`motor_cli=codex`: a chave DELA direto, sem gateway). Quem decide qual CLI
+roda cada job é o backend (`motor_cli` no claim); o worker declara a
+capacidade `motor_codex`. Instalação do Codex: `npm install -g
+@openai/codex@0.150.0` (pin na versão em que o contrato foi validado —
+`src/motor/codex-runtime.js` espelha `webapp/worker/codex_proc.py`; mudou
+num lado, muda no outro).

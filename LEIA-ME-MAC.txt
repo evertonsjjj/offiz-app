@@ -31,4 +31,18 @@ PRIMEIROS PASSOS
   (sem custo por token): Menu "Offiz" > "Motor local..." e siga os
   passos (instalar/conectar o Claude e parear a organização).
 
+MOTOR CODEX (organização com provedor OpenAI)
+O app roda DOIS motores: Claude Code (Anthropic) e Codex CLI (OpenAI).
+Qual executa cada tarefa é decidido pela organização (Sala das
+máquinas > Provedor de IA); o app obedece.
+
+Instalar o Codex CLI (Terminal):
+
+    npm install -g @openai/codex@0.150.0
+    codex --version
+
+(Requer Node.js: https://nodejs.org — ou `brew install node`.)
+Login é OPCIONAL: as tarefas da organização rodam com a CHAVE dela,
+que chega pelo pareamento.
+
 Dúvidas: https://github.com/evertonsjjj/offiz-app#readme

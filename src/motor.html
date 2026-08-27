@@ -94,9 +94,27 @@
     <p class="msg" id="msgClaude"></p>
   </div>
 
+  <!-- Codex (OpenAI) — o 2º motor: org de OpenAI roda a chave DELA direto -->
+  <div class="cartao">
+    <h2>3 · Codex (OpenAI)</h2>
+    <div class="linha">
+      <div id="codexInfo" class="aviso">Verificando…</div>
+      <span class="pill neutro" id="pillCodex">…</span>
+    </div>
+    <div class="linha" style="margin-top:8px">
+      <button id="btnInstalarCodex" class="primario" hidden>Instalar Codex CLI</button>
+      <button id="btnCodexLogin" title="Opcional — os jobs usam a chave da organização">codex login (opcional)</button>
+    </div>
+    <div id="logInstalarCodex" class="minilog" hidden></div>
+    <p class="aviso">Para organização com provedor OpenAI: as tarefas rodam no Codex CLI
+      com a chave DELA (vem do pareamento) — sem gateway. Instalação manual:
+      <code>npm install -g @openai/codex@0.150.0</code></p>
+    <p class="msg" id="msgCodex"></p>
+  </div>
+
   <!-- Dependências do escritório (aparece só quando a org pareada declara) -->
   <div class="cartao" id="cardDeps" hidden>
-    <h2>3 · Dependências do escritório</h2>
+    <h2>4 · Dependências do escritório</h2>
     <div id="listaDeps"></div>
     <div id="logDeps" class="minilog" hidden></div>
     <p class="aviso">Ferramentas que os escritórios da sua organização usam nesta
@@ -106,7 +124,7 @@
 
   <!-- Motor -->
   <div class="cartao">
-    <h2>4 · Motor</h2>
+    <h2>5 · Motor</h2>
     <div class="linha">
       <div id="jobInfo" class="aviso">Motor parado.</div>
       <span></span>
@@ -218,6 +236,57 @@
     pill($('pillClaude'), 'conectado', 'ok');
   }
 
+  let instalandoCodex = false;
+
+  async function atualizarCodex() {
+    if (instalandoCodex) return;
+    $('codexInfo').textContent = 'Verificando…';
+    const s = await window.offizMotor.codexStatus();
+    if (instalandoCodex) return;
+    if (!s.installed) {
+      $('codexInfo').textContent = 'Codex CLI não encontrado nesta máquina.';
+      pill($('pillCodex'), 'não instalado', 'erro');
+      $('btnInstalarCodex').hidden = false;
+      $('msgCodex').textContent = '';
+      return;
+    }
+    $('btnInstalarCodex').hidden = true;
+    $('codexInfo').textContent = `Instalado — ${s.versao || 'codex'}.`;
+    pill($('pillCodex'), '✓ pronto', 'ok');
+  }
+
+  window.offizMotor.onInstalarCodexLog((linha) => {
+    const el = $('logInstalarCodex');
+    el.hidden = false;
+    el.textContent = (el.textContent + '\n' + linha).split('\n').slice(-14).join('\n');
+    el.scrollTop = el.scrollHeight;
+  });
+
+  $('btnInstalarCodex').onclick = async () => {
+    instalandoCodex = true;
+    $('btnInstalarCodex').disabled = true;
+    $('logInstalarCodex').hidden = false;
+    $('logInstalarCodex').textContent = 'Instalando o Codex CLI (npm)…';
+    $('msgCodex').textContent = '';
+    const r = await window.offizMotor.instalarCodex();
+    instalandoCodex = false;
+    $('btnInstalarCodex').disabled = false;
+    if (r && r.ok) {
+      $('logInstalarCodex').hidden = true;
+      $('msgCodex').textContent = `Instalado${r.versao ? ` (${r.versao})` : ''} — pronto para tarefas de org OpenAI.`;
+    } else {
+      $('msgCodex').textContent = (r && r.error) || 'A instalação falhou — tente manualmente.';
+    }
+    atualizarCodex();
+  };
+
+  $('btnCodexLogin').onclick = async () => {
+    const r = await window.offizMotor.codexLoginTerminal();
+    $('msgCodex').textContent = r && r.ok
+      ? 'Terminal aberto — conclua o login por lá (opcional: os jobs usam a chave da organização).'
+      : (r && r.error) || 'Não abriu o terminal.';
+  };
+
   // ── dependências do escritório (whitelist checada no main process) ──
   let instalandoDep = null; // nome da dependência em instalação (trava a lista)
   let depsCache = [];       // último resultado do verificador (p/ re-render)
@@ -310,7 +379,15 @@
     if (r.orgs.length > 1) {
       const sel = $('selOrg');
       if (sel.hidden) {
-        sel.innerHTML = r.orgs.map((o) => `<option value="${o.id}">${o.nome}</option>`).join('');
+        // textContent, nunca innerHTML (23/08/2026, auditoria APP-04): o nome
+        // da organização vem do backend e esta página tem a bridge IPC — um
+        // nome com markup viraria injeção numa janela com poderes.
+        sel.replaceChildren(...r.orgs.map((o) => {
+          const op = document.createElement('option');
+          op.value = String(o.id);
+          op.textContent = o.nome;
+          return op;
+        }));
         sel.hidden = false;
         $('msgParear').textContent = 'Escolha a organização e clique de novo em parear.';
         return;
@@ -379,6 +456,7 @@
     // "não instalado" e sobrescreveria a mensagem específica com o texto
     // genérico (o estado dos botões já está correto no caso de falha).
     if (r.ok) atualizarClaude();
+    atualizarCodex();
   };
 
   $('btnConectar').onclick = async () => {
@@ -396,6 +474,7 @@
       $('msgClaude').className = 'msg erro';
     }
     atualizarClaude();
+    atualizarCodex();
   };
 
   $('btnTerminal').onclick = async () => {
@@ -429,6 +508,7 @@
   window.offizMotor.onUpdate(() => atualizar());
   atualizar().then(atualizarDeps); // deps dependem do estado (cfg.dependencias)
   atualizarClaude();
+    atualizarCodex();
   setInterval(atualizar, 4000);
   setInterval(atualizarClaude, 30000); // spawnSync — sem exagero
   setInterval(atualizarDeps, 60000);   // idem (checagens spawnSync no main)

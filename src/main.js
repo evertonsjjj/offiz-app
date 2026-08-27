@@ -27,6 +27,7 @@ const { apiV1 } = require('./motor/backend-client');
 const { MotorWorker } = require('./motor/worker');
 const { CriadorSessao } = require('./motor/criador');
 const claudeManager = require('./motor/claude-manager');
+const codexManager = require('./motor/codex-manager');
 const depsManager = require('./motor/deps-manager');
 const { origemAutorizada } = require('./motor/origem');
 
@@ -533,6 +534,15 @@ function registrarIpc() {
   // Instalação do Claude CLI com 1 clique (instalador oficial da Anthropic).
   // A saída é streamada linha a linha para o painel; ao final o binário
   // redetectado é fixado em cfg.claudeBin (apps GUI não enxergam o PATH novo).
+  handleSeguro('codex-status', () => codexManager.statusCodex(cfg.codexBin));
+  handleSeguro('codex-instalar', async () => {
+    const r = await codexManager.instalarCodex(cfg.codexBin, (linha) => {
+      enviarParaPaineis('codex-instalar-log', linha);
+    });
+    return r;
+  });
+  handleSeguro('codex-login-terminal', () => codexManager.loginTerminal(cfg.codexBin));
+
   handleSeguro('claude-instalar', async () => {
     const r = await claudeManager.instalarClaude(cfg.claudeBin, (linha) => {
       enviarParaPaineis('claude-instalar-log', linha);
@@ -630,6 +640,7 @@ if (!lock) {
     app.userAgentFallback = marcarUaDesktop(app.userAgentFallback);
     cfg = config.load();
     worker = new MotorWorker({
+      getCodexBin: () => cfg.codexBin,
       getBackendUrl: () => cfg.backendUrl,
       getWorkerToken: () => config.getWorkerToken(cfg),
       getClaudeBin: () => cfg.claudeBin,
