@@ -65,11 +65,16 @@ Fluxo: clone raso **fora** do escritório → avaliar → propor → só então 
    Diga isso ao consultor e pare.
 3. **Decida o que o repositório é:**
    - **Servidor MCP** (fala em Model Context Protocol, usa
-     `@modelcontextprotocol/sdk`, `mcp.server`, `FastMCP`…): o Offiz ainda
-     **não consome** servidores MCP — diga isso com todas as letras. Ofereça a
-     alternativa que funciona hoje: colher a LÓGICA das tools dele (o código
-     que faz o trabalho) como skill com ferramentas chamáveis por linha de
-     comando.
+     `@modelcontextprotocol/sdk`, `mcp.server`, `FastMCP`…): desde 30/08/2026
+     o Offiz **consome** MCP — o office declara `mcp_servers` no manifesto e o
+     worker configura os dois motores. Proponha declará-lo, mas confira DUAS
+     coisas antes, porque elas reprovam servidor: (a) a credencial dele tem de
+     caber em NOME de variável de ambiente (o valor vem do `job_env` da org —
+     token literal em config não entra); (b) **não há allowlist de
+     ferramenta**: adotar o servidor é adotar todas as tools dele,
+     auto-aprovadas. Servidor que publica, apaga ou gasta dinheiro reprova por
+     (b) — e aí a alternativa é a de sempre: colher a LÓGICA das tools dele (o
+     código que faz o trabalho) como skill chamável por linha de comando.
    - **Skills/scripts/biblioteca**: avalie o que serve ao escritório e proponha
      o recorte — quais arquivos, o que adaptar, o que descartar.
 4. **Proposta antes da cópia.** Resuma o que existe, o recorte e TODO arquivo

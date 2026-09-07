@@ -28,7 +28,14 @@
 'use strict';
 
 const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
+
+// A normalização da declaração de MCP mora no irmão (mesmo arranjo do lado
+// Python, onde codex_proc.py importa de claude_proc.py): os dois motores
+// recebem a MESMA declaração do claim e precisam recusar exatamente as mesmas
+// entradas — validação copiada é validação que diverge no primeiro conserto.
+const { normalizarMcpServers } = require('./claude-runtime');
 
 const RESUMO_MAX = 200;
 const TETO_AGENTS_MD = 262144;
@@ -44,23 +51,67 @@ const FERRAMENTA_POR_ITEM = {
   todo_list: 'TodoWrite',
 };
 
-function resolveCodexCmd(codexBin) {
-  const binario = codexBin || process.env.CODEX_BIN || 'codex';
-  if (process.platform === 'win32') {
-    // which manual: PATHEXT + .cmd precisa do shell do Windows (mesmo cuidado
-    // do claude-runtime com o shim do npm).
-    const r = spawnSync('where.exe', [binario], { encoding: 'utf-8', windowsHide: true });
-    const achado = (r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-    const alvo = achado || binario;
-    if (alvo.toLowerCase().endsWith('.cmd') || alvo.toLowerCase().endsWith('.bat')) {
-      return [process.env.COMSPEC || 'cmd.exe', '/c', alvo];
-    }
-    return [alvo];
-  }
-  return [binario];
+function _existe(p) {
+  try { return fs.existsSync(p); } catch { return false; }
 }
 
-function buildCodexArgs(model, effort) {
+function resolveCodexCmd(codexBin) {
+  const binario = codexBin || process.env.CODEX_BIN || 'codex';
+  if (process.platform !== 'win32') return [binario];
+  // O `where` devolve DUAS entradas para um pacote npm no Windows: o shim SEM
+  // extensao (script sh, que o CreateProcess NAO executa) e o `.cmd`. Pegar a
+  // primeira derrubava TODA tarefa de org Codex na maquina do dono, com
+  // `spawn ...\npm\codex ENOENT` — flagrado ao vivo em 30/08/2026, com o job
+  // ja claimado e o workspace ja baixado. O claude-runtime filtra por extensao
+  // executavel desde sempre; este arquivo e irmao dele e tinha ficado para tras.
+  let alvo = _existe(binario) ? binario : '';
+  if (!alvo) {
+    // (`where` so aceita NOME, nao caminho: com um caminho ele erra, a lista
+    // vem vazia e a busca cai no proprio `binario` — que e o desejado.)
+    const r = spawnSync('where.exe', [binario], { encoding: 'utf-8', windowsHide: true });
+    const achados = (r.stdout || '')
+      .split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      .filter((c) => /\.(exe|cmd|bat)$/i.test(c));
+    // .exe primeiro: dispensa o shell.
+    const ordenados = achados
+      .filter((c) => /\.exe$/i.test(c))
+      .concat(achados.filter((c) => !/\.exe$/i.test(c)));
+    alvo = ordenados.find(_existe) || binario;
+  }
+  if (/\.(cmd|bat)$/i.test(alvo)) return [process.env.COMSPEC || 'cmd.exe', '/c', alvo];
+  return [alvo];
+}
+
+/** Pares `-c` dos servidores MCP declarados pelo escritório.
+ *
+ *  O Codex não tem arquivo de config por job como o Claude: servidor de MCP
+ *  entra pela MESMA porta `-c` das outras opções (`mcp_servers.<nome>.…`), e
+ *  o valor é lido como TOML — JSON.stringify já produz a string entre aspas e
+ *  a lista no formato que ele aceita.
+ *
+ *  O que NÃO entra aqui: valor de segredo. Servidor http autentica por
+ *  `bearer_token_env_var` (o NOME da variável; quem resolve é o CLI, lendo o
+ *  env do processo), e o stdio recebe o env pela herança do spawn. Um token em
+ *  argv apareceria em qualquer `ps`/Gerenciador de Tarefas da máquina do
+ *  cliente — e o argv também vai parar em log de erro. */
+function mcpArgsDoCodex(decl, avisar) {
+  const pares = [];
+  for (const s of normalizarMcpServers(decl, avisar)) {
+    const base = `mcp_servers.${s.nome}`;
+    if (s.url) {
+      pares.push('-c', `${base}.url=${JSON.stringify(s.url)}`);
+      if (s.bearerTokenEnvVar) {
+        pares.push('-c', `${base}.bearer_token_env_var=${JSON.stringify(s.bearerTokenEnvVar)}`);
+      }
+    } else {
+      pares.push('-c', `${base}.command=${JSON.stringify(s.command)}`);
+      if (s.args.length) pares.push('-c', `${base}.args=${JSON.stringify(s.args)}`);
+    }
+  }
+  return pares;
+}
+
+function buildCodexArgs(model, effort, mcpServers) {
   const args = [
     'exec',
     '--json',
@@ -72,6 +123,9 @@ function buildCodexArgs(model, effort) {
   ];
   const eff = String(effort || '').trim().toLowerCase();
   if (EFFORTS_CODEX.has(eff)) args.push('-c', `model_reasoning_effort=${eff}`);
+  // Sem declaração (ou com tudo inválido) a lista vem vazia e o argv fica
+  // idêntico ao de antes — escritório que não pede MCP não muda de comando.
+  args.push(...mcpArgsDoCodex(mcpServers));
   if (model) args.push('--model', model);
   args.push('-'); // prompt via stdin: acentos no Windows + tamanho de linha
   return args;
@@ -101,12 +155,16 @@ function buildCodexEnv(openaiApiKey, extraEnv) {
     env[String(chave)] = String(valor);
   }
   env.PYTHONIOENCODING = 'utf-8';
+  // PYTHONUTF8=1: os scripts do escritório rodam ffmpeg com text=True e, no
+  // Windows, decodificam pela locale (cp1252) — um acento derruba a leitura.
+  // Mesma linha do worker/claude_proc.py (05/09/2026).
+  env.PYTHONUTF8 = '1';
   return env;
 }
 
-function spawnCodex({ workspaceDir, prompt, model, effort, openaiApiKey, extraEnv, codexBin }) {
+function spawnCodex({ workspaceDir, prompt, model, effort, openaiApiKey, extraEnv, codexBin, mcpServers }) {
   const cmd = resolveCodexCmd(codexBin);
-  const args = cmd.slice(1).concat(buildCodexArgs(model, effort));
+  const args = cmd.slice(1).concat(buildCodexArgs(model, effort, mcpServers));
   const proc = spawn(cmd[0], args, {
     cwd: workspaceDir,
     env: buildCodexEnv(openaiApiKey, extraEnv),
@@ -238,4 +296,6 @@ class CodexJsonParser {
   }
 }
 
-module.exports = { spawnCodex, CodexJsonParser, buildCodexArgs, buildCodexEnv, resolveCodexCmd };
+module.exports = {
+  spawnCodex, CodexJsonParser, buildCodexArgs, buildCodexEnv, resolveCodexCmd, mcpArgsDoCodex,
+};

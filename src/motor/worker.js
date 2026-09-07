@@ -233,6 +233,11 @@ class MotorWorker extends EventEmitter {
     // (org OpenAI, chave direto); qualquer outro valor, o Claude Code.
     const usaCodex = String(claim.motor_cli || 'claude').trim().toLowerCase() === 'codex';
     const parser = usaCodex ? new CodexJsonParser() : new StreamJsonParser();
+    // Servidores MCP que o ESCRITÓRIO declara (o claim entrega no bloco
+    // `office`, junto de dependencias/env_opcionais). Quem valida é o runtime;
+    // aqui só se repassa — inclusive `undefined` de backend antigo, que os
+    // dois motores tratam como "nenhum servidor".
+    const mcpDoOffice = (claim.office || {}).mcp_servers;
     let status = 'done';
     let erro = null;
     let proc = null;
@@ -268,6 +273,10 @@ class MotorWorker extends EventEmitter {
           // No Codex a chave da org viaja no MESMO campo do claim (o backend
           // decide o que ela é conforme o provedor).
           openaiApiKey: claim.anthropic_api_key || '',
+          // Chaves de mídia da org (FAL_KEY, ELEVENLABS_API_KEY…). Sem isto o
+          // escritório roda sem imagem, voz nem vídeo — só ffmpeg.
+          extraEnv: claim.job_env || {},
+          mcpServers: mcpDoOffice,
           codexBin: this._opts.getCodexBin ? this._opts.getCodexBin() : '',
         });
         this._procAtual = proc;
@@ -286,6 +295,8 @@ class MotorWorker extends EventEmitter {
           // x-api-key. Backend antigo não manda o campo — o default é o
           // comportamento de sempre.
           usaBearer: String(claim.auth_modo || 'api_key') === 'bearer',
+          extraEnv: claim.job_env || {},
+          mcpServers: mcpDoOffice,
           claudeBin: this._opts.getClaudeBin(),
         });
         this._procAtual = proc;

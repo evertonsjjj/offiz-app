@@ -37,8 +37,8 @@ function resolveEffort(effort) {
   return VALID_EFFORTS.has(key) ? key : DEFAULT_EFFORT;
 }
 
-function buildClaudeArgs(model, effort, sessionId) {
-  return [
+function buildClaudeArgs(model, effort, sessionId, mcpConfigPath) {
+  const args = [
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
@@ -48,19 +48,194 @@ function buildClaudeArgs(model, effort, sessionId) {
     '--session-id', sessionId,
     '--dangerously-skip-permissions',
   ];
+  // Sem declaração de MCP o argv fica EXATAMENTE como era: escritório que não
+  // pede servidor nenhum não pode mudar de comportamento por causa deste
+  // recurso (é o que o mcp-config-e2e chama de regressão).
+  if (mcpConfigPath) {
+    args.push('--mcp-config', mcpConfigPath);
+    // --strict-mcp-config anda COLADO no --mcp-config: sem ele o CLI SOMA os
+    // servidores pessoais da máquina do cliente (~/.claude.json, .mcp.json do
+    // cwd) aos do escritório — ferramenta que ninguém declarou, com acesso a
+    // dados de outra pessoa, dentro de um job da org. O motor local roda na
+    // casa do cliente; é justamente aqui que essa mistura aconteceria.
+    args.push('--strict-mcp-config');
+  }
+  return args;
+}
+
+// ---------------------------------------------------------------------------
+// MCP — declaração do escritório (bloco `office.mcp_servers` do claim)
+//
+// ESPELHO do lado Python (webapp/worker): os dois motores consomem a MESMA
+// declaração, e a normalização vive AQUI porque o codex-runtime é irmão deste
+// arquivo e importa daqui (mesmo arranjo de codex_proc.py, que importa de
+// claude_proc.py) — validação duplicada é validação que diverge.
+//
+// A LEI DA DECLARAÇÃO: ela carrega NOMES de variáveis de ambiente, nunca
+// VALORES. Segredo em valor literal é descartado na normalização, e por isso
+// nenhum segredo chega ao argv (que qualquer `ps` da máquina lê) nem ao
+// arquivo de config. O valor de verdade viaja pelo env do processo, que o
+// job_env já monta (buildClaudeEnv/buildCodexEnv).
+// ---------------------------------------------------------------------------
+
+// O nome vira caminho de chave de config no Codex (`-c mcp_servers.<nome>.…`):
+// aceitar ponto/aspas aqui seria deixar a declaração escrever em QUALQUER
+// chave do CLI. Whitelist estreita, não escape.
+const MCP_NOME_OK = /^[A-Za-z0-9_-]{1,64}$/;
+const MCP_ENV_NOME_OK = /^[A-Za-z_][A-Za-z0-9_]{0,64}$/;
+const MCP_CONFIG_NOME = '.offiz-mcp.json';
+
+function _avisoMcpPadrao(msg) {
+  // console.warn e não throw: MCP é acessório. Uma linha malformada no
+  // manifesto do escritório não pode matar um job que faria o trabalho todo
+  // sem servidor nenhum.
+  console.warn('[mcp] ' + msg);
+}
+
+/**
+ * Normaliza a declaração do claim em uma lista
+ * [{nome, url, command, args, envDe, bearerTokenEnvVar}].
+ *
+ * Aceita mapa {nome: spec} e lista [{nome, …}] de propósito: o formato canônico
+ * é o mapa (é o que o manifesto escreve), mas uma lista chegando do backend
+ * não pode virar zero servidores em silêncio.
+ *
+ * Entrada malformada é IGNORADA COM AVISO, uma entrada por vez — o servidor
+ * bom da linha de baixo continua valendo.
+ */
+function normalizarMcpServers(decl, avisar) {
+  const avisa = typeof avisar === 'function' ? avisar : _avisoMcpPadrao;
+  if (!decl) return [];
+  let entradas;
+  if (Array.isArray(decl)) {
+    entradas = decl.map((spec) => [
+      (spec && typeof spec === 'object' && (spec.nome || spec.name)) || '', spec,
+    ]);
+  } else if (typeof decl === 'object') {
+    entradas = Object.entries(decl);
+  } else {
+    avisa('declaração ignorada: esperava mapa ou lista, veio ' + typeof decl);
+    return [];
+  }
+
+  const out = [];
+  const vistos = new Set();
+  for (const [nomeBruto, spec] of entradas) {
+    const nome = String(nomeBruto || '').trim();
+    if (!MCP_NOME_OK.test(nome)) {
+      avisa('servidor ignorado: nome inválido (' + JSON.stringify(nomeBruto) + ')');
+      continue;
+    }
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+      avisa('"' + nome + '" ignorado: a declaração não é um objeto');
+      continue;
+    }
+    if (vistos.has(nome)) {
+      avisa('"' + nome + '" ignorado: nome repetido na declaração');
+      continue;
+    }
+    const url = typeof spec.url === 'string' ? spec.url.trim() : '';
+    const command = typeof spec.command === 'string' ? spec.command.trim() : '';
+    // XOR: os dois juntos é ambiguidade (qual transporte vale?) e nenhum é
+    // declaração vazia. Nos dois casos o certo é não subir o servidor.
+    if (Boolean(url) === Boolean(command)) {
+      avisa('"' + nome + '" ignorado: declare url OU command — nunca os dois, nunca nenhum');
+      continue;
+    }
+    if (url && !/^https?:\/\//i.test(url)) {
+      avisa('"' + nome + '" ignorado: url precisa ser http(s)');
+      continue;
+    }
+    let args = [];
+    if (command && spec.args !== undefined) {
+      if (!Array.isArray(spec.args) || spec.args.some((a) => typeof a !== 'string')) {
+        avisa('"' + nome + '" ignorado: args precisa ser lista de strings');
+        continue;
+      }
+      args = spec.args.slice();
+    }
+    // `env_de` são NOMES de variáveis que o servidor precisa enxergar. Um
+    // mapa `env` com valores (ou headers com token) é descartado sem dó: ver
+    // "A LEI DA DECLARAÇÃO" acima.
+    const envDe = [];
+    for (const v of Array.isArray(spec.env_de) ? spec.env_de : []) {
+      if (typeof v === 'string' && MCP_ENV_NOME_OK.test(v.trim())) envDe.push(v.trim());
+      else avisa('"' + nome + '": env_de inválido descartado (' + JSON.stringify(v) + ')');
+    }
+    const bearerBruto = typeof spec.bearer_token_env_var === 'string'
+      ? spec.bearer_token_env_var.trim() : '';
+    const bearerTokenEnvVar = MCP_ENV_NOME_OK.test(bearerBruto) ? bearerBruto : '';
+    if (bearerBruto && !bearerTokenEnvVar) {
+      avisa('"' + nome + '": bearer_token_env_var inválido descartado');
+    }
+    vistos.add(nome);
+    out.push({ nome, url, command, args, envDe, bearerTokenEnvVar });
+  }
+  return out;
+}
+
+/** Config no formato que o Claude Code lê (--mcp-config).
+ *
+ *  `${NOME}` em vez do valor: o CLI expande variáveis de ambiente ao carregar
+ *  o arquivo, então o segredo continua só no env do processo — nem no argv,
+ *  nem em disco no workspace (que é justamente o que o job zipa e sobe). */
+function mcpConfigDoClaude(servidores) {
+  const mcpServers = {};
+  for (const s of servidores) {
+    if (s.url) {
+      const entrada = { type: 'http', url: s.url };
+      if (s.bearerTokenEnvVar) {
+        entrada.headers = { Authorization: 'Bearer ${' + s.bearerTokenEnvVar + '}' };
+      }
+      mcpServers[s.nome] = entrada;
+    } else {
+      const entrada = { type: 'stdio', command: s.command, args: s.args };
+      if (s.envDe.length) {
+        entrada.env = {};
+        for (const nome of s.envDe) entrada.env[nome] = '${' + nome + '}';
+      }
+      mcpServers[s.nome] = entrada;
+    }
+  }
+  return { mcpServers };
+}
+
+/** Materializa a config no workspace do job e devolve o caminho ('' se não há
+ *  servidor válido ou se a escrita falhou — MCP nunca derruba o job). */
+function escreverMcpConfig(workspaceDir, decl, avisar) {
+  const avisa = typeof avisar === 'function' ? avisar : _avisoMcpPadrao;
+  const servidores = normalizarMcpServers(decl, avisa);
+  if (!servidores.length) return '';
+  // No workspace do JOB (não em ~/.claude): a pasta é apagada no fim, então a
+  // config morre com o job em vez de virar servidor permanente na máquina do
+  // cliente. Nome com ponto para não ser confundido com material do escritório.
+  const alvo = path.join(workspaceDir, MCP_CONFIG_NOME);
+  try {
+    fs.writeFileSync(alvo, JSON.stringify(mcpConfigDoClaude(servidores), null, 2), 'utf-8');
+    return alvo;
+  } catch (e) {
+    avisa('config não pôde ser escrita (' + e.message + ') — o job segue sem MCP');
+    return '';
+  }
 }
 
 // ESPELHO de build_claude_env (webapp/worker/claude_proc.py) — o contrato da
 // casa é que os dois mudam JUNTOS. `usaBearer` entra no FIM da lista de
 // parâmetros de propósito: a assinatura é posicional e um parâmetro no meio
 // quebraria os chamadores em silêncio.
-function buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer) {
+function buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer, extraEnv) {
   const env = { ...process.env };
   // Vars que, sobrando no ambiente, têm precedência sobre a chave injetada e
   // cobrariam a conta errada (ou dariam 401).
   delete env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_AUTH_TOKEN;
   delete env.ANTHROPIC_BASE_URL;
+  // Paridade com o worker cloud (worker/claude_proc.py) e com o irmão Codex:
+  // o prompt do job é arbitrário e roda com Bash — o CLI nunca precisa das
+  // coordenadas do worker, e herdá-las é dar a um prompt malicioso o caminho
+  // para pedir claim de OUTRAS orgs.
+  delete env.WORKER_TOKEN;
+  delete env.BACKEND_URL;
   if (motorModo === 'cli') {
     // Modo CLI: preserva CLAUDE_CODE_OAUTH_TOKEN (se o cliente usou
     // `claude setup-token`) e deixa o CLI cair no login local. Nunca injeta.
@@ -84,7 +259,27 @@ function buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer)
     // delete lá em cima — a URL que valer é a do claim, nunca a da máquina.
     if (anthropicBaseUrl) env.ANTHROPIC_BASE_URL = anthropicBaseUrl;
   }
+  // Estúdio de mídia: o `job_env` do claim (FAL_KEY, ELEVENLABS_API_KEY…) entra
+  // DEPOIS das remoções acima, com o mesmo filtro do worker cloud e do Codex —
+  // job_env nunca sequestra a conta do run nem devolve as vars do worker.
+  //
+  // Isto faltava por inteiro no motor local (30/08/2026): o backend já mandava
+  // `job_env` no claim desde 29/08 (backend/app/api/internal.py:871), e aqui a
+  // função nem recebia o parâmetro. Resultado: quem pareava o Desktop para não
+  // gastar API descobria que a peça saía SEM IMAGEM E SEM VOZ — o escritório
+  // ficava só com o ffmpeg, e é por isso que uma peça que pedia estilização
+  // saiu como filtro: não havia modelo nenhum ao alcance dele.
+  for (const [chave, valor] of Object.entries(extraEnv || {})) {
+    const alto = String(chave).toUpperCase();
+    if (alto.startsWith('ANTHROPIC_') || alto.startsWith('CLAUDE_')
+      || alto === 'WORKER_TOKEN' || alto === 'BACKEND_URL') continue;
+    env[String(chave)] = String(valor);
+  }
   env.PYTHONIOENCODING = 'utf-8';
+  // PYTHONUTF8=1: os scripts do escritório rodam ffmpeg com text=True e, no
+  // Windows, decodificam pela locale (cp1252) — um acento derruba a leitura.
+  // Mesma linha do worker/claude_proc.py (05/09/2026).
+  env.PYTHONUTF8 = '1';
   // O Claude CLI recusa --dangerously-skip-permissions rodando como root;
   // IS_SANDBOX=1 é a válvula oficial para ambiente confinado (raro no
   // desktop, mas cobre quem abrir o app como root/sudo no Mac/Linux).
@@ -212,13 +407,17 @@ function resolveClaudeCmd(claudeBin) {
  * Spawna o Claude headless no workspace e envia o prompt via STDIN em UTF-8
  * (evita mojibake de acentos no Windows e limite de tamanho de linha de comando).
  */
-function spawnClaude({ workspaceDir, prompt, model, effort, sessionId, anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer, claudeBin }) {
+function spawnClaude({ workspaceDir, prompt, model, effort, sessionId, anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer, claudeBin, extraEnv, mcpServers }) {
   const base = resolveClaudeCmd(claudeBin);
-  const args = base.slice(1).concat(buildClaudeArgs(model, effort, sessionId));
+  // A config precisa existir em disco ANTES do spawn: o CLI lê o --mcp-config
+  // na largada. Sem declaração (ou com declaração toda inválida) o caminho vem
+  // vazio e o argv fica idêntico ao de sempre.
+  const mcpConfigPath = escreverMcpConfig(workspaceDir, mcpServers);
+  const args = base.slice(1).concat(buildClaudeArgs(model, effort, sessionId, mcpConfigPath));
 
   const proc = spawn(base[0], args, {
     cwd: workspaceDir,
-    env: buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer),
+    env: buildClaudeEnv(anthropicApiKey, motorModo, anthropicBaseUrl, usaBearer, extraEnv),
     stdio: ['pipe', 'pipe', 'pipe'],
     // Grupo próprio no unix: killProcessTree mata o claude E os filhos dele.
     detached: process.platform !== 'win32',
@@ -284,6 +483,9 @@ class StreamJsonParser {
     this._buf = '';
     this._streamedText = false;   // deltas já emitidos p/ msg corrente
     this._taskIds = new Map();    // tool_use_id do Task → nome do subagente
+    // Servidores de MCP que o init reportou fora do ar — a tela ja soube
+    // na hora (ver _parseSystem); isto fica para quem quiser contar no fim.
+    this.mcpFalhos = [];
     this.resultInfo = null;
   }
 
@@ -328,10 +530,45 @@ class StreamJsonParser {
       }
       return [];
     }
+    if (t === 'system') return this._parseSystem(ev);
     if (t === 'assistant') return this._parseAssistant(ev);
     if (t === 'user') return this._parseUser(ev);
     if (t === 'result') return this._parseResult(ev);
-    return []; // system/init, rate_limit_event etc.
+    return []; // rate_limit_event etc.
+  }
+
+  /* system/init: o UNICO lugar onde o CLI diz se um servidor de MCP conectou.
+     Espelho de claude_proc.py::_parse_system — e o espelho ESTAVA PELA
+     METADE: a fiacao de MCP foi para os dois motores, a observabilidade so
+     para o Python. Na nuvem o servidor caido virava alarme na tela; aqui, na
+     maquina do cliente, o job rodava inteiro sem a ferramenta com cara de
+     normalidade. E o pior lugar para essa falha ser muda.
+
+     Sai como `erro` porque e o unico dos cinco eventos do protocolo que a tela
+     pinta como alerta — tipo novo cairia no default do switch e seria mudo de
+     novo. `erro` NAO marca o job como failed: quem decide o status e o result. */
+  _parseSystem(ev) {
+    if (ev.subtype !== 'init') return [];
+    const out = [];
+    for (const srv of Array.isArray(ev.mcp_servers) ? ev.mcp_servers : []) {
+      if (!srv || typeof srv !== 'object') continue;
+      const status = String(srv.status || '').trim().toLowerCase();
+      // Status ausente nao vira alarme: melhor calar do que assustar por
+      // mudanca de shape do CLI. Falta de conexao ele diz com todas as letras.
+      if (!status || status === 'connected') continue;
+      const nome = String(srv.name || '').trim() || 'sem nome';
+      this.mcpFalhos.push(nome);
+      out.push({
+        tipo: 'erro',
+        payload: {
+          mensagem:
+            `A ferramenta externa "${nome}" não conectou (status: ${status}). ` +
+            'O trabalho segue SEM ela — o que dependia dessa fonte pode sair ' +
+            'incompleto.',
+        },
+      });
+    }
+    return out;
   }
 
   _parseAssistant(ev) {
@@ -363,6 +600,21 @@ class StreamJsonParser {
       nome = nome || 'subagente';
       if (typeof block.id === 'string' && block.id) this._taskIds.set(block.id, nome);
       return { tipo: 'subagente', payload: { nome, acao: 'start' } };
+    }
+    if (name.startsWith('mcp__')) {
+      // Espelho de claude_proc.py: ferramenta de MCP chega como
+      // `mcp__<servidor>__<tool>`, e esse nome cru ia direto para o diario e
+      // para a tela do cliente leigo. O mesmo destino que o Codex ja da ao
+      // `mcp_tool_call` — ferramenta "Task" — vale aqui: a tela traduz "Task"
+      // para "acionando especialista", e servidor/tool viram o resumo legivel.
+      const partes = name.split('__');
+      const servidor = partes.length > 1 ? partes[1] : '';
+      const ferramentaMcp = partes.slice(2).join('__').replace(/_/g, ' ').trim();
+      const resumo = [servidor, ferramentaMcp].filter(Boolean).join(' · ');
+      return {
+        tipo: 'tool_use',
+        payload: { ferramenta: 'Task', resumo: resumo.slice(0, RESUMO_MAX) },
+      };
     }
     return { tipo: 'tool_use', payload: { ferramenta: name, resumo: toolResumo(inputObj) } };
   }
@@ -422,6 +674,10 @@ class StreamJsonParser {
 module.exports = {
   buildClaudeArgs,
   buildClaudeEnv,
+  normalizarMcpServers,
+  mcpConfigDoClaude,
+  escreverMcpConfig,
+  MCP_CONFIG_NOME,
   resolveClaudeCmd,
   claudeCandidates,
   spawnClaude,

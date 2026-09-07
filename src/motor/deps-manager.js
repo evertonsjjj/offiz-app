@@ -123,6 +123,14 @@ const DEPS_CONHECIDAS = {
   // aqui: o office pedia `faster-whisper` e a whitelist não conhecia o nome,
   // então a declaração não instalava nada e a legenda local falhava calada.
   'faster-whisper': _pip('faster-whisper'),
+  // Desenho determinístico de dado exato (data, hora, placar) NA FONTE DA
+  // MARCA — o escritório de conteúdo declara em office.json. Entrou junto com
+  // a declaração, de propósito: é EXATAMENTE o bug de duas linhas acima
+  // repetido, e a auditoria de 30/08/2026 pegou a repetição antes de ela
+  // chegar na máquina do dono ("instale manualmente: Pillow" em vez do
+  // install de um clique). Declarar sem a whitelist conhecer o nome é
+  // declarar nada.
+  Pillow: _pip('Pillow'),
 };
 
 function _argvPorSo(spec) {
