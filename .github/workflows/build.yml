@@ -7,6 +7,22 @@
 #
 # Sem assinatura de código por ora: Windows mostra SmartScreen; macOS exige
 # botão-direito → Abrir na 1ª vez (documentado no README).
+# 09/09/2026 - duas mudancas por causa da subida para Electron 44:
+#
+# 1. Node 22. O electron@44.2.0 declara engines.node ">= 22.12.0", e junto com
+#    ele @electron/get, @electron/rebuild, node-abi e
+#    @electron-internal/extract-zip. Em Node 20 o build nao se sustenta. Isso
+#    foi MEDIDO no package-lock, nao suposto.
+#
+# 2. A release nasce RASCUNHO e so e publicada pelo job `publicar`, depois que
+#    Windows e macOS subiram os quatro assets. Antes ela era criada ANTES dos
+#    builds: se um deles falhasse, sobrava uma release publica e vazia, e
+#    releases/latest/download/Offiz-Setup.exe passava a dar 404 - que e
+#    exatamente o link do botao de baixar do site (Criador.tsx:54-55). Uma
+#    falha de build derrubava o download do produto. Rascunho nao entra em
+#    `latest`, entao a versao anterior continua servindo ate a nova ficar
+#    inteira.
+
 name: build
 
 on:
@@ -26,7 +42,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || \
-          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft \
             --title "Offiz Desktop ${GITHUB_REF_NAME#v}" \
             --notes "Espelho do site + motor local BYO-CLI. Windows: Offiz-Setup.exe · macOS: Offiz.dmg (universal). Instaladores não assinados — ver README para o aviso de 1ª execução."
 
@@ -35,9 +51,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        # Sem isto o checkout deixa o GITHUB_TOKEN (contents: write) gravado
+        # como http.extraheader no .git/config do runner, e o `npm ci` logo
+        # abaixo executa scripts de instalação de ~280 pacotes na MESMA
+        # máquina. Estes dois jobs não usam git depois do checkout — só npm,
+        # electron-builder e `gh`, que autentica por GH_TOKEN do ambiente.
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run dist:win
@@ -60,9 +83,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        # Sem isto o checkout deixa o GITHUB_TOKEN (contents: write) gravado
+        # como http.extraheader no .git/config do runner, e o `npm ci` logo
+        # abaixo executa scripts de instalação de ~280 pacotes na MESMA
+        # máquina. Estes dois jobs não usam git depois do checkout — só npm,
+        # electron-builder e `gh`, que autentica por GH_TOKEN do ambiente.
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run dist:mac
@@ -81,3 +111,12 @@ jobs:
         run: |
           gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --clobber \
             dist/Offiz.dmg dist/Offiz-mac.zip
+
+  publicar:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tira o rascunho, agora que os quatro assets existem
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

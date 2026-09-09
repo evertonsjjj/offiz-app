@@ -1,0 +1,11 @@
+# Este repositório é PÚBLICO e é o espelho do app desktop. Ele nunca teve
+# .gitignore, e o fluxo do release (clonar, `npm install` para validar o lock,
+# `electron-builder` para provar o build) deixa em disco justamente as duas
+# árvores que não podem entrar aqui: node_modules/ (~300 MB de código de
+# terceiros) e dist/ (os instaladores, que moram na release, não no git).
+# Um `git add -A` distraído publicaria as duas.
+node_modules/
+dist/
+.env
+.env.*
+*.local

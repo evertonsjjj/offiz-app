@@ -263,6 +263,16 @@ class MotorWorker extends EventEmitter {
 
       events.start();
 
+      // O RELÓGIO VIAJA COM O JOB (07/09/2026). O worker da nuvem sempre
+      // exportou OFFIZ_JOB_TIMEOUT_MIN e o motor da peça (peca.py) lê essa
+      // variável para parar LIMPO 10 min antes do kill, com o request_id da
+      // fila salvo e o parcial honesto. No app o relógio existia (o watchdog
+      // abaixo), mas o processo não sabia dele: a peça piloto 'O gigante
+      // acorda' foi MORTA aos 50 min no meio da composição, com os quatro
+      // clipes pagos no cache e nenhum master. Mesmo valor nos dois lugares.
+      const timeoutMin = Number(claim.timeout_min) > 0 ? Number(claim.timeout_min) : 30;
+      const jobEnv = { ...(claim.job_env || {}), OFFIZ_JOB_TIMEOUT_MIN: String(timeoutMin) };
+
       // 2) spawn do motor local — Claude ou Codex, quem manda é o claim
       if (usaCodex) {
         proc = spawnCodex({
@@ -273,9 +283,9 @@ class MotorWorker extends EventEmitter {
           // No Codex a chave da org viaja no MESMO campo do claim (o backend
           // decide o que ela é conforme o provedor).
           openaiApiKey: claim.anthropic_api_key || '',
-          // Chaves de mídia da org (FAL_KEY, ELEVENLABS_API_KEY…). Sem isto o
-          // escritório roda sem imagem, voz nem vídeo — só ffmpeg.
-          extraEnv: claim.job_env || {},
+          // Chaves de mídia da org (FAL_KEY, ELEVENLABS_API_KEY…) + o relógio.
+          // Sem isto o escritório roda sem imagem, voz nem vídeo — só ffmpeg.
+          extraEnv: jobEnv,
           mcpServers: mcpDoOffice,
           codexBin: this._opts.getCodexBin ? this._opts.getCodexBin() : '',
         });
@@ -295,7 +305,7 @@ class MotorWorker extends EventEmitter {
           // x-api-key. Backend antigo não manda o campo — o default é o
           // comportamento de sempre.
           usaBearer: String(claim.auth_modo || 'api_key') === 'bearer',
-          extraEnv: claim.job_env || {},
+          extraEnv: jobEnv,
           mcpServers: mcpDoOffice,
           claudeBin: this._opts.getClaudeBin(),
         });
@@ -315,7 +325,7 @@ class MotorWorker extends EventEmitter {
       // 3) watchdog: cancelamento (via resposta dos eventos) + timeout.
       // Dispara o kill UMA vez e se desarma — killProcessTree é assíncrono e
       // o 'close' do processo encerra o fluxo normalmente.
-      const timeoutMin = Number(claim.timeout_min) > 0 ? Number(claim.timeout_min) : 30;
+      // (timeoutMin nasce antes do spawn — é o mesmo número que foi ao env.)
       const deadline = inicio + timeoutMin * 60 * 1000;
       const watchdog = setInterval(() => {
         if (events.cancelled) {

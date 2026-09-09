@@ -63,6 +63,20 @@ Config persistida em `%APPDATA%/offiz-standalone/config.json`
 (`~/Library/Application Support/offiz-standalone/` no Mac). As envs acima têm
 precedência mas não são gravadas.
 
+## Requisitos do cliente
+
+| Sistema | Mínimo | Desde |
+| --- | --- | --- |
+| Windows | 10 ou mais novo | sempre |
+| macOS | **13 (Ventura)** ou mais novo | **0.2.5** |
+
+O piso do macOS subiu na 0.2.5: o Electron 44 abandonou Big Sur (11) e
+Monterey (12) — quem estiver neles fica na
+[0.2.4](https://github.com/evertonsjjj/offiz-app/releases/tag/v0.2.4), que
+continua publicada. Isso está avisado no topo do `LEIA-ME-MAC.txt`, porque o
+sintoma (o app não abre) é o MESMO da quarentena do Gatekeeper e o `xattr` do
+manual não conserta este caso — sem o aviso, o cliente diagnostica errado.
+
 ## Empacotar
 
 ```bash

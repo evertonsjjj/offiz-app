@@ -1,6 +1,14 @@
 OFFIZ DESKTOP — COMO EXECUTAR NO MAC
 =====================================
 
+ANTES DE TUDO: QUAL macOS VOCÊ TEM?
+A partir da versão 0.2.5 o Offiz exige macOS 13 (Ventura) ou mais novo.
+Confira no menu da maçã > "Sobre este Mac". Em Big Sur (11) ou Monterey
+(12) o app NÃO abre — e o comando de quarentena do passo 3 não resolve
+esse caso, porque o problema é outro. Se o seu Mac for mais antigo, baixe
+a versão 0.2.4, que continua disponível:
+https://github.com/evertonsjjj/offiz-app/releases/tag/v0.2.4
+
 Você baixou o Offiz em ZIP. Para rodar:
 
 1. Dê dois cliques no ZIP para extrair (aparece o Offiz.app).
