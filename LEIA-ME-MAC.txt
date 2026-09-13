@@ -1,3 +1,8 @@
+DOCUMENTO LEGADO - 13/09/2026
+O aplicativo tem distribuicao e suporte somente para Windows por enquanto.
+As instrucoes abaixo registram a distribuicao Mac anterior.
+Versao Windows atual: https://github.com/evertonsjjj/offiz-app/releases/latest
+
 OFFIZ DESKTOP — COMO EXECUTAR NO MAC
 =====================================
 
