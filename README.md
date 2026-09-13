@@ -1,6 +1,9 @@
 # Offiz Standalone — espelho do site com motor local
 
-App desktop (Windows/Mac) que o cliente baixa e instala. A janela principal é o
+> **Suporte atual: Windows.** A distribuição e o suporte para Mac estão suspensos por enquanto.
+> [Baixar e instalar o Offiz para Windows](https://github.com/evertonsjjj/offiz-app/releases/tag/v0.2.13).
+
+App desktop para Windows que o cliente baixa e instala. A janela principal é o
 **próprio site** (offiz.com.br) — toda a engine, dados e UI ficam no servidor,
 o app nunca desatualiza. O que o app adiciona é o **motor local**: um worker
 que roda as tarefas da organização do cliente **nesta máquina**, com o **Claude
@@ -30,7 +33,7 @@ Máquina do cliente                          Servidor (Coolify)
 3. **Conectar o Claude** — botão "Conectar Claude": roda `claude auth login
    --claudeai` invisível, captura a URL do OAuth e abre o navegador; o callback
    conclui sozinho (sem colar código). Fallbacks: terminal visível (`wt`/cmd no
-   Windows, script `.command` + Terminal.app no Mac) e `claude setup-token`.
+   Windows) e `claude setup-token`.
 
 Ligou o motor → as tarefas enviadas pelo site (org em `motor_modo = "cli"`)
 rodam aqui com `--dangerously-skip-permissions` dentro de um workspace isolado
@@ -60,7 +63,7 @@ npm start
 ```
 
 Config persistida em `%APPDATA%/offiz-standalone/config.json`
-(`~/Library/Application Support/offiz-standalone/` no Mac). As envs acima têm
+As envs acima têm
 precedência mas não são gravadas.
 
 ## Requisitos do cliente
@@ -68,31 +71,19 @@ precedência mas não são gravadas.
 | Sistema | Mínimo | Desde |
 | --- | --- | --- |
 | Windows | 10 ou mais novo | sempre |
-| macOS | **13 (Ventura)** ou mais novo | **0.2.5** |
-
-O piso do macOS subiu na 0.2.5: o Electron 44 abandonou Big Sur (11) e
-Monterey (12) — quem estiver neles fica na
-[0.2.4](https://github.com/evertonsjjj/offiz-app/releases/tag/v0.2.4), que
-continua publicada. Isso está avisado no topo do `LEIA-ME-MAC.txt`, porque o
-sintoma (o app não abre) é o MESMO da quarentena do Gatekeeper e o `xattr` do
-manual não conserta este caso — sem o aviso, o cliente diagnostica errado.
-
 ## Empacotar
 
 ```bash
 npm run dist:win   # NSIS one-click + zip (rodar no Windows)
-npm run dist:mac   # dmg + zip (PRECISA rodar num Mac)
 ```
 
-Sem assinatura de código o Windows mostra SmartScreen e o macOS exige
-botão-direito → Abrir na primeira vez (ou Apple Developer ID + notarização
-para distribuição limpa).
+O pacote Windows ainda não tem assinatura de editor. Confira a origem e o SHA-256 publicado antes de decidir abrir o arquivo.
 
 ## Segurança
 
 - O token de worker é **escopado à organização** (hash sha256 no banco,
   revogável em Configurações) — não é o token global do cloud.
-- O app guarda o token via `safeStorage` (DPAPI/Keychain).
+- O app guarda o token via `safeStorage` (DPAPI no Windows).
 - `--dangerously-skip-permissions` roda **na máquina do cliente, no workspace
   da org dele** — deixe isso explícito no onboarding.
 - ToS: modo cli usa a assinatura Claude do próprio cliente nos próprios
